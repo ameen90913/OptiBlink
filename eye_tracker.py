@@ -14,6 +14,21 @@ class EyeTracker:
             min_tracking_confidence=0.5
         )
         
+        # Morse code to letter mapping
+        self.morse_to_letter = {
+            '.-': 'A', '-...': 'B', '-.-.': 'C', '-..': 'D', '.': 'E',
+            '..-.': 'F', '--.': 'G', '....': 'H', '..': 'I', '.---': 'J',
+            '-.-': 'K', '.-..': 'L', '--': 'M', '-.': 'N', '---': 'O',
+            '.--.': 'P', '--.-': 'Q', '.-.': 'R', '...': 'S', '-': 'T',
+            '..-': 'U', '...-': 'V', '.--': 'W', '-..-': 'X', '-.--': 'Y',
+            '--..': 'Z',
+            # Adding number mappings
+            '-----': '0', '.----': '1', '..---': '2', '...--': '3', '....-': '4',
+            '.....': '5', '-....': '6', '--...': '7', '---..': '8', '----.': '9',
+            # Emergency SOS
+            '.....': 'Emergency SOS'
+        }
+        
         # Eye landmarks indices
         self.LEFT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
         self.RIGHT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
@@ -25,7 +40,7 @@ class EyeTracker:
         # Blink duration tracking
         self.blink_start_time = None
         self.is_blinking = False
-        self.short_blink_threshold = 0.6
+        self.short_blink_threshold = 0.5
         self.short_blinks = 0
         self.long_blinks = 0
         
@@ -117,6 +132,11 @@ class EyeTracker:
             self.current_morse += "-"
         
         self.last_blink_end_time = current_time
+        
+        # Try to convert Morse code to letter
+        if self.current_morse in self.morse_to_letter:
+            return self.morse_to_letter[self.current_morse]
+        return None
     
     def calibrate(self, ear, area):
         """Calibrate the system with baseline measurements"""
@@ -193,8 +213,8 @@ class EyeTracker:
                     self.blink_counter += 1
                     self.last_blink_time = current_time
                     
-                    # Update Morse code sequence
-                    self.update_morse_code(blink_type)
+                    # Update Morse code sequence and get letter if complete
+                    letter = self.update_morse_code(blink_type)
             
             # Draw eye contours
             if left_points is not None and right_points is not None:
@@ -209,12 +229,21 @@ class EyeTracker:
             cv2.putText(frame, f"Long: {self.long_blinks}", (10, 110),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
             
-            # Display current Morse code sequence at the bottom center
+            # Display current Morse code sequence and letter
             morse_text = f"Morse: {self.current_morse}"
             text_size = cv2.getTextSize(morse_text, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
             text_x = (frame_width - text_size[0]) // 2
-            cv2.putText(frame, morse_text, (text_x, frame_height - 30),
+            cv2.putText(frame, morse_text, (text_x, frame_height - 60),
                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            
+            # Display the translated letter if available
+            if self.current_morse in self.morse_to_letter:
+                letter = self.morse_to_letter[self.current_morse]
+                letter_text = f"Letter: {letter}"
+                letter_size = cv2.getTextSize(letter_text, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
+                letter_x = (frame_width - letter_size[0]) // 2
+                cv2.putText(frame, letter_text, (letter_x, frame_height - 30),
+                           cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 2)
             
             # Draw blink state indicator
             if self.blink_state == "Closed":
