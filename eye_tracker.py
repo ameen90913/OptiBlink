@@ -25,7 +25,7 @@ def load_words_from_csv(csv_path, column_name="Word"):
         words = [word.lower() for word in nltk_words.words() if word.isalpha() and len(word) > 2]
     return words
 
-word_list = load_words_from_csv(r"D:\Ameen\OptiBlink\words.csv", column_name="Word")
+word_list = load_words_from_csv(r"words.csv", column_name="Word")
 
 class TrieNode:
     def __init__(self):
@@ -150,8 +150,10 @@ class EyeTracker:
 
     def calculate_eye_features(self, eye_landmarks, frame_width, frame_height):
         try:
-            points = np.array([(int(landmark.x * frame_width), int(landmark.y * frame_height))
-                               for landmark in eye_landmarks])
+            points = np.array([
+                (int(landmark.x * frame_width), int(landmark.y * frame_height))
+                for landmark in eye_landmarks
+            ])
             v1 = np.linalg.norm(points[1] - points[5])
             v2 = np.linalg.norm(points[2] - points[4])
             v3 = np.linalg.norm(points[3] - points[7])
@@ -184,37 +186,30 @@ class EyeTracker:
     def process_special_character(self, char):
         if char == 'ENTER':
             if self.word_buffer:
-                # Only prints the full word to the terminal when 'ENTER' is pressed
                 print(f"Message: {self.word_buffer}")
                 self.message_history.append(self.word_buffer)
                 self.auto.record_usage(self.word_buffer.lower())
                 self.last_word_printed = self.word_buffer
-                # Send the word and ENTER as keystrokes
                 keyboard.write(self.word_buffer)
                 keyboard.send('enter')
             self.word_buffer = ""
             self.morse_char_buffer = ""
         elif char == 'SPACE':
-            # Add a space to the buffer and send a space keystroke
             self.word_buffer += " "
             keyboard.send('space')
             self.morse_char_buffer = ""
         elif char == 'BACKSPACE':
             if self.word_buffer:
                 self.word_buffer = self.word_buffer[:-1]
-                # Send a backspace keystroke
                 keyboard.send('backspace')
             self.morse_char_buffer = ""
         elif char == 'CAPS':
             self.caps_lock = not self.caps_lock
-            # Optionally, toggle system caps lock (uncomment if desired)
-            # keyboard.send('caps lock')
             self.morse_char_buffer = ""
         elif char == 'SOS':
             self.message_history.append("SOS")
             self.word_buffer = ""
             self.morse_char_buffer = ""
-            # Optionally, send 'SOS' as keystrokes
             keyboard.write('SOS')
 
     def decode_morse_char(self):
@@ -226,15 +221,16 @@ class EyeTracker:
                 index = int(char[-1]) - 1
                 if 0 <= index < len(self.current_suggestions):
                     selected_word = self.current_suggestions[index]
-                    self.word_buffer = selected_word
+                    last_word = self.word_buffer.strip().split(" ")[-1]
+                    # Remove the partial word from both word_buffer and notepad
+                    for _ in range(len(last_word)):
+                        keyboard.send('backspace')
+                    self.word_buffer = self.word_buffer[:-(len(last_word))] + selected_word + " "
                     self.auto.record_usage(selected_word.lower())
-                    # Send the selected word as keystrokes
                     keyboard.write(selected_word)
-                    self.morse_char_buffer = ""
             else:
                 char_to_add = char.upper() if self.caps_lock else char.lower()
                 self.word_buffer += char_to_add
-                # Send the character as a keystroke
                 keyboard.write(char_to_add)
             self.morse_char_buffer = ""
             return char
@@ -265,13 +261,6 @@ class EyeTracker:
         if not self.is_calibrated:
             cv2.putText(frame, f"Calibrating... {self.calibration_counter}/{self.calibration_frames}",
                         (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        current_y += 40
-
-        cv2.putText(frame, f"Blinks: {self.blink_counter}", (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        current_y += 40
-        cv2.putText(frame, f"Short: {self.short_blinks}", (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-        current_y += 40
-        cv2.putText(frame, f"Long: {self.long_blinks}", (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         current_y += 40
 
         if results.multi_face_landmarks:
@@ -320,22 +309,23 @@ class EyeTracker:
                 cv2.polylines(frame, [right_points], True, (0, 255, 0), 1)
 
         cv2.putText(frame, f"CAPS: {'ON' if self.caps_lock else 'OFF'} - Word: {self.word_buffer}",
-                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         current_y += line_spacing
 
         cv2.putText(frame, f"Morse: {self.morse_char_buffer}",
-                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
         current_y += line_spacing
 
         possible_letters = [char for code, char in self.morse_to_letter.items() if code.startswith(self.morse_char_buffer)]
         if possible_letters:
             possible_text = f"Possible: {', '.join(possible_letters)}"
-            cv2.putText(frame, possible_text, (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2)
+            cv2.putText(frame, possible_text, (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             current_y += line_spacing
 
-        # Only show suggestions if the user has started typing a word
         if self.word_buffer:
-            self.current_suggestions = self.auto.suggest(self.word_buffer.lower())[:3]
+            last_word = self.word_buffer.strip().split(" ")[-1].lower()
+            self.auto.suggest(last_word)
+            self.current_suggestions = self.auto.suggest(last_word)
             start_x = 10
             box_height = 50
             box_width = 200
@@ -344,15 +334,15 @@ class EyeTracker:
             for idx, suggestion in enumerate(self.current_suggestions):
                 box_top_left = (start_x + idx * (box_width + padding), current_y)
                 box_bottom_right = (box_top_left[0] + box_width, box_top_left[1] + box_height)
-                cv2.rectangle(frame, box_top_left, box_bottom_right, (0, 255, 255), 2)
+                cv2.rectangle(frame, box_top_left, box_bottom_right, (255, 0, 0), 2)
 
                 text_x = box_top_left[0] + 10
                 text_y = box_top_left[1] + 25
-                cv2.putText(frame, suggestion, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+                cv2.putText(frame, suggestion, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
                 morse_keys = ['.---.', '..--.', '.--..']
                 if idx < len(morse_keys):
-                    cv2.putText(frame, morse_keys[idx], (text_x, text_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                    cv2.putText(frame, morse_keys[idx], (text_x, text_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
             current_y += box_height + line_spacing
 
         if self.blink_state == "Closed":
@@ -370,7 +360,7 @@ def main():
     window_width = 950
     window_height = 750
 
-    keyboard_image_path = "D:\Ameen\OptiBlink\morse_keyboard.jpg"
+    keyboard_image_path = "morse_keyboard.jpg"
     keyboard_img = cv2.imread(keyboard_image_path, cv2.IMREAD_UNCHANGED)
 
     if keyboard_img is None:
