@@ -6,6 +6,9 @@ from collections import deque, defaultdict
 import os
 import csv
 import keyboard
+import ctypes  
+import win32gui
+import win32con
 
 # Load words from CSV or fallback to NLTK
 def load_words_from_csv(csv_path, column_name="Word"):
@@ -147,6 +150,10 @@ class EyeTracker:
 
         self.current_suggestions = []
         self.last_word_printed = ""
+        # Flag to prevent re-sending keys when character is processed
+        self.key_sent_for_current_char = False 
+        # Track the length of the word_buffer that has already been sent to the keyboard
+        self.last_sent_len = 0 
 
     def calculate_eye_features(self, eye_landmarks, frame_width, frame_height):
         try:
@@ -185,53 +192,84 @@ class EyeTracker:
 
     def process_special_character(self, char):
         if char == 'ENTER':
-            if self.word_buffer:
+            # Only send the part of the word_buffer that hasn't been sent yet
+            text_to_send = self.word_buffer[self.last_sent_len:]
+            if text_to_send:
+                keyboard.write(text_to_send)
+            keyboard.send('enter')
+            if self.word_buffer: # Only record usage if there was a word to record
                 print(f"Message: {self.word_buffer}")
                 self.message_history.append(self.word_buffer)
                 self.auto.record_usage(self.word_buffer.lower())
-                self.last_word_printed = self.word_buffer
-                keyboard.write(self.word_buffer)
-                keyboard.send('enter')
+                self.last_word_printed = self.word_buffer # This is for display, not core logic
             self.word_buffer = ""
             self.morse_char_buffer = ""
+            self.last_sent_len = 0 # Reset last_sent_len as the buffer is cleared
         elif char == 'SPACE':
+            # Always send a single space if space is detected
             self.word_buffer += " "
             keyboard.send('space')
             self.morse_char_buffer = ""
+            self.last_sent_len = len(self.word_buffer) # Update sent length
         elif char == 'BACKSPACE':
             if self.word_buffer:
                 self.word_buffer = self.word_buffer[:-1]
                 keyboard.send('backspace')
             self.morse_char_buffer = ""
+            self.last_sent_len = len(self.word_buffer) # Update sent length after backspace
         elif char == 'CAPS':
             self.caps_lock = not self.caps_lock
             self.morse_char_buffer = ""
         elif char == 'SOS':
             self.message_history.append("SOS")
-            self.word_buffer = ""
+            self.word_buffer = "" # Clear buffer for SOS
             self.morse_char_buffer = ""
             keyboard.write('SOS')
+            keyboard.send('enter') # Send enter after SOS
+            self.last_sent_len = len(self.word_buffer) # Update sent length (should be 0)
 
     def decode_morse_char(self):
+        # Reset the flag at the beginning of decoding a new character
+        self.key_sent_for_current_char = False 
+
         if self.morse_char_buffer in self.morse_to_letter:
             char = self.morse_to_letter[self.morse_char_buffer]
             if char in ['ENTER', 'SPACE', 'BACKSPACE', 'CAPS', 'SOS']:
                 self.process_special_character(char)
+                self.key_sent_for_current_char = True # Mark as key sent
             elif char.startswith("SELECT"):
                 index = int(char[-1]) - 1
                 if 0 <= index < len(self.current_suggestions):
                     selected_word = self.current_suggestions[index]
-                    last_word = self.word_buffer.strip().split(" ")[-1]
+                    last_word_in_buffer = self.word_buffer.strip().split(" ")[-1]
+                    
+                    # Calculate how many backspaces are needed to clear the partial word
+                    backspaces_needed = len(last_word_in_buffer)
+
                     # Remove the partial word from both word_buffer and notepad
-                    for _ in range(len(last_word)):
+                    for _ in range(backspaces_needed):
                         keyboard.send('backspace')
-                    self.word_buffer = self.word_buffer[:-(len(last_word))] + selected_word + " "
+                    
+                    # Update word_buffer with the selection
+                    # The part of word_buffer *before* the last word needs to be preserved
+                    if ' ' in self.word_buffer.strip():
+                        # Find the index of the last space
+                        last_space_index = self.word_buffer.strip().rfind(' ')
+                        # Reconstruct the word_buffer
+                        self.word_buffer = self.word_buffer[:last_space_index + 1] + selected_word + " "
+                    else:
+                        self.word_buffer = selected_word + " "
+
                     self.auto.record_usage(selected_word.lower())
-                    keyboard.write(selected_word)
+                    keyboard.write(selected_word + " ") # Write the selected word and a space
+                    self.key_sent_for_current_char = True # Mark as key sent
+                    self.last_sent_len = len(self.word_buffer) # Update sent length after selection
             else:
                 char_to_add = char.upper() if self.caps_lock else char.lower()
                 self.word_buffer += char_to_add
-                keyboard.write(char_to_add)
+                keyboard.write(char_to_add) # Only write the single new character
+                self.key_sent_for_current_char = True # Mark as key sent
+                self.last_sent_len = len(self.word_buffer) # Update sent length
             self.morse_char_buffer = ""
             return char
         else:
@@ -297,58 +335,86 @@ class EyeTracker:
                             self.long_blinks += 1
                             self.morse_char_buffer += "-"
                         self.blink_counter += 1
+                        # When a blink just finished and a dot/dash is added, reset the key_sent_for_current_char flag
+                        self.key_sent_for_current_char = False 
                     elif self.open_start_time:
                         self.open_duration = current_time - self.open_start_time
                         self.blink_duration = 0
-                        if self.open_duration >= self.open_threshold and self.morse_char_buffer:
+                        # Ensure we only decode/send if a character is ready AND it hasn't been sent yet for this buffer
+                        if self.open_duration >= self.open_threshold and self.morse_char_buffer and not self.key_sent_for_current_char:
                             self.decode_morse_char()
-                            self.open_start_time = None
+                            self.open_start_time = None # Reset open_start_time after processing
 
             if left_points is not None and right_points is not None:
                 cv2.polylines(frame, [left_points], True, (0, 255, 0), 1)
                 cv2.polylines(frame, [right_points], True, (0, 255, 0), 1)
 
         cv2.putText(frame, f"CAPS: {'ON' if self.caps_lock else 'OFF'} - Word: {self.word_buffer}",
-                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        current_y += line_spacing
+                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        current_y += int(line_spacing * 0.7)
 
         cv2.putText(frame, f"Morse: {self.morse_char_buffer}",
-                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        current_y += line_spacing
+                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        current_y += int(line_spacing * 0.7)
 
         possible_letters = [char for code, char in self.morse_to_letter.items() if code.startswith(self.morse_char_buffer)]
         if possible_letters:
-            possible_text = f"Possible: {', '.join(possible_letters)}"
-            cv2.putText(frame, possible_text, (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-            current_y += line_spacing
+            # Split possible letters into two lines if too long
+            possible_text = [f"Possible: {', '.join(possible_letters)}"]
+            max_line_length = 40  # max chars per line (adjust as needed)
+            if len(possible_text[0]) > max_line_length:
+                # Split into two lines
+                mid = len(possible_letters) // 2
+                line1 = f"Possible: {', '.join(possible_letters[:mid])}"
+                line2 = f"{', '.join(possible_letters[mid:])}"
+                possible_text = [line1, line2]
+            for line in possible_text:
+                cv2.putText(frame, line, (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                current_y += int(line_spacing * 0.7)
 
+        # Suggestions logic
         if self.word_buffer:
-            last_word = self.word_buffer.strip().split(" ")[-1].lower()
-            self.auto.suggest(last_word)
-            self.current_suggestions = self.auto.suggest(last_word)
-            start_x = 10
-            box_height = 50
-            box_width = 200
-            padding = 10
+            # Get the current partial word for suggestions (handle spaces)
+            buffer_parts = self.word_buffer.strip().split(" ")
+            if buffer_parts and buffer_parts[-1]: # Ensure there's a non-empty last part
+                last_word_for_suggestion = buffer_parts[-1].lower()
+            else:
+                last_word_for_suggestion = "" # No partial word, no suggestions
 
+            if last_word_for_suggestion: # Only suggest if there's something to suggest for
+                self.current_suggestions = self.auto.suggest(last_word_for_suggestion)
+            else:
+                self.current_suggestions = [] # Clear suggestions if no partial word
+
+            start_x = 10
+            box_height = 40
+            box_width = 150
+            padding = 10
+            max_x = frame.shape[1] - box_width - padding
+            morse_keys = ['.---.', '..--.', '.--..']
+            box_x = start_x
+            box_y = current_y
             for idx, suggestion in enumerate(self.current_suggestions):
-                box_top_left = (start_x + idx * (box_width + padding), current_y)
-                box_bottom_right = (box_top_left[0] + box_width, box_top_left[1] + box_height)
+                if box_x > max_x:
+                    box_x = start_x
+                    box_y += box_height + padding
+                box_top_left = (box_x, box_y)
+                box_bottom_right = (box_x + box_width, box_y + box_height)
                 cv2.rectangle(frame, box_top_left, box_bottom_right, (255, 0, 0), 2)
 
-                text_x = box_top_left[0] + 10
-                text_y = box_top_left[1] + 25
-                cv2.putText(frame, suggestion, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                text_x = box_x + 10
+                text_y = box_y + 20
+                cv2.putText(frame, suggestion, (text_x, text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
-                morse_keys = ['.---.', '..--.', '.--..']
                 if idx < len(morse_keys):
-                    cv2.putText(frame, morse_keys[idx], (text_x, text_y + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-            current_y += box_height + line_spacing
+                    cv2.putText(frame, morse_keys[idx], (text_x, text_y + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 2)
+                box_x += box_width + padding
+            current_y = box_y + box_height + int(line_spacing * 0.7) # Only increment if suggestions were shown
 
         if self.blink_state == "Closed":
-            cv2.circle(frame, (frame_width - 50, 50), 20, (0, 0, 255), -1)
+            cv2.circle(frame, (frame_width - 50, 50), 10, (0, 0, 255), -1)
         else:
-            cv2.circle(frame, (frame_width - 50, 50), 20, (0, 255, 0), -1)
+            cv2.circle(frame, (frame_width - 50, 50), 10, (0, 255, 0), -1)
 
         return frame
 
@@ -357,8 +423,21 @@ def main():
     auto = AutoCompleteSystem()
     eye_tracker = EyeTracker(auto)
 
-    window_width = 950
-    window_height = 750
+    window_width = 650
+    window_height = 450
+
+    # Move window to top-right corner
+    user32 = ctypes.windll.user32
+    screen_width = user32.GetSystemMetrics(0)
+    x_pos = screen_width - window_width
+    y_pos = 40  # Leave space for window controls
+
+    # Function to set OpenCV window always on top
+    def set_window_always_on_top(window_name):
+        hwnd = win32gui.FindWindow(None, window_name)
+        if hwnd:
+            win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
 
     keyboard_image_path = "morse_keyboard.jpg"
     keyboard_img = cv2.imread(keyboard_image_path, cv2.IMREAD_UNCHANGED)
@@ -376,7 +455,7 @@ def main():
             
             frame = cv2.flip(frame, 1)
 
-            keyboard_height_ratio = 0.40
+            keyboard_height_ratio = 0.45
             keyboard_height = int(window_height * keyboard_height_ratio)
             video_height = window_height - keyboard_height
 
@@ -398,8 +477,22 @@ def main():
             full_display_frame[video_height:video_height+keyboard_height, 0:window_width] = resized_keyboard_img
 
             cv2.imshow("Eye Blink Morse Code", full_display_frame)
+            cv2.moveWindow("Eye Blink Morse Code", x_pos, y_pos)
+            set_window_always_on_top("Eye Blink Morse Code")
 
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            # Robust window close detection
+            try:
+                if cv2.getWindowProperty("Eye Blink Morse Code", cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            except cv2.error:
+                break
+
+            key = cv2.waitKey(1)
+            if key == -1:
+                # If window is closed, waitKey returns -1
+                if cv2.getWindowProperty("Eye Blink Morse Code", cv2.WND_PROP_VISIBLE) < 1:
+                    break
+            if key & 0xFF == ord('q'):
                 break
     finally:
         cap.release()
