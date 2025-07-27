@@ -1,3 +1,8 @@
 opencv-python
 mediapipe
 numpy
+nltk
+keyboard
+pywin32
+gtts
+pygame
