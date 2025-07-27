@@ -6,6 +6,13 @@ from collections import deque, defaultdict
 import os
 import csv
 import keyboard
+import ctypes  
+import win32gui
+import win32con
+from gtts import gTTS
+import pygame
+import threading
+import tempfile
 
 # Load words from CSV or fallback to NLTK
 def load_words_from_csv(csv_path, column_name="Word"):
@@ -136,7 +143,7 @@ class EyeTracker:
             # Special characters
             '.-.-': 'ENTER', '.--.-': 'CAPS', '--': 'BACKSPACE', '......': 'SOS',
             '..--': 'SPACE', '.---.': 'SELECT1', '..--.': 'SELECT2',
-            '.--..': 'SELECT3'
+            '.--..': 'SELECT3', '-.-.-': 'TTS_TOGGLE'
         }
 
         self.LEFT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
@@ -178,6 +185,13 @@ class EyeTracker:
 
         self.current_suggestions = []
         self.last_word_printed = ""
+        # Flag to prevent re-sending keys when character is processed
+        self.key_sent_for_current_char = False 
+        # Track the length of the word_buffer that has already been sent to the keyboard
+        self.last_sent_len = 0 
+        self.tts_enabled = False  # TTS toggle flag
+        self.is_speaking = False  # Track if TTS is currently speaking
+        self.speaking_message = ""  # Store the message being spoken
 
     def calculate_eye_features(self, eye_landmarks, frame_width, frame_height):
         try:
@@ -252,39 +266,57 @@ class EyeTracker:
             self.is_speaking = False
             self.speaking_message = ""
 
-    def _delayed_speak(self, text):
-        time.sleep(0.5)  # Wait half a second
-        self._speak_blocking(text)
-
     def process_special_character(self, char):
         if char == 'ENTER':
+            text_to_send = self.word_buffer[self.last_sent_len:]
+            if text_to_send:
+                keyboard.write(text_to_send)
+            keyboard.send('enter')
             if self.word_buffer:
                 print(f"Message: {self.word_buffer}")
                 self.message_history.append(self.word_buffer)
                 self.auto.record_usage(self.word_buffer.lower())
                 self.last_word_printed = self.word_buffer
-                keyboard.write(self.word_buffer)
-                keyboard.send('enter')
+                if self.tts_enabled:
+                    message_to_speak = self.word_buffer  # Store before clearing
+                    # Add a short delay before TTS
+                    time.sleep(0.3)
+                    self.speak(message_to_speak)
             self.word_buffer = ""
             self.morse_char_buffer = ""
+            self.last_sent_len = 0
         elif char == 'SPACE':
-            # Always send a single space if space is detected
             self.word_buffer += " "
             keyboard.send('space')
             self.morse_char_buffer = ""
+            self.last_sent_len = len(self.word_buffer)
         elif char == 'BACKSPACE':
             if self.word_buffer:
                 self.word_buffer = self.word_buffer[:-1]
                 keyboard.send('backspace')
             self.morse_char_buffer = ""
+            self.last_sent_len = len(self.word_buffer)
         elif char == 'CAPS':
             self.caps_lock = not self.caps_lock
             self.morse_char_buffer = ""
         elif char == 'SOS':
             self.message_history.append("SOS")
-            self.word_buffer = "" # Clear buffer for SOS
+            self.word_buffer = ""
             self.morse_char_buffer = ""
             keyboard.write('SOS')
+            keyboard.send('enter')
+            self.last_sent_len = len(self.word_buffer)
+            if self.tts_enabled:
+                self.speak("SOS")
+        elif char == 'TTS_TOGGLE':
+            self.tts_enabled = not self.tts_enabled
+            status = "ON" if self.tts_enabled else "OFF"
+            print(f"TTS {status}")
+            if self.word_buffer:
+                self.speak(self.word_buffer)
+            else:
+                self.speak("No message")
+            self.morse_char_buffer = ""
 
     def decode_morse_char(self):
         # Reset the flag at the beginning of decoding a new character
@@ -412,9 +444,15 @@ class EyeTracker:
                 cv2.polylines(frame, [left_points], True, (0, 255, 0), 1)
                 cv2.polylines(frame, [right_points], True, (0, 255, 0), 1)
 
-        cv2.putText(frame, f"CAPS: {'ON' if self.caps_lock else 'OFF'} - Word: {self.word_buffer}",
-                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        current_y += line_spacing
+        cv2.putText(frame, f"CAPS: {'ON' if self.caps_lock else 'OFF'} - TTS: {'ON' if self.tts_enabled else 'OFF'} - Word: {self.word_buffer}",
+                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        current_y += int(line_spacing * 0.7)
+
+        # Show speaking indicator if TTS is active
+        if self.is_speaking:
+            cv2.putText(frame, f"Speaking: {self.speaking_message}",
+                        (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+            current_y += int(line_spacing * 0.7)
 
         cv2.putText(frame, f"Morse: {self.morse_char_buffer}",
                     (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
