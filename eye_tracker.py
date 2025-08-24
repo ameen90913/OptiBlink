@@ -13,6 +13,193 @@ from gtts import gTTS
 import pygame
 import threading
 import tempfile
+import subprocess
+import webbrowser
+import json
+
+# Configuration management
+def load_config():
+    """Loa        #         # Configuration and emergency contact
+        self.config = load_config()
+        self.emergency_contact = self.config.get("emergency_contact", "+91 6366011723")
+        print("EyeTracker: Initialization completed successfully!")uration and emergency contact
+        self.config = load_config()
+        self.emergency_contact = self.config.get("emergency_contact", "+91 6366011723")iguration from config.json file"""
+    config_file = "config.json"
+    default_config = {
+        "emergency_contact": "+91 6366011723"
+    }
+    
+    try:
+        if os.path.exists(config_file):
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+                # Ensure all default keys exist
+                for key, value in default_config.items():
+                    if key not in config:
+                        config[key] = value
+                return config
+        else:
+            # Create default config file
+            save_config(default_config)
+            return default_config
+    except Exception as e:
+        print(f"Error loading config: {e}. Using defaults.")
+        return default_config
+
+def save_config(config):
+    """Save configuration to config.json file"""
+    try:
+        with open("config.json", 'w') as f:
+            json.dump(config, f, indent=2)
+    except Exception as e:
+        print(f"Error saving config: {e}")
+
+def make_emergency_call(phone_number):
+    """Initiate an emergency call using available methods"""
+    success = False
+    methods_tried = []
+    
+    # Clean and format the phone number
+    clean_number = phone_number.replace(" ", "").replace("-", "")
+    
+    # Method 1: Try WhatsApp calling (desktop app and web) - DEFAULT METHOD
+    try:
+        # Format number for WhatsApp (remove + and spaces)
+        wa_number = clean_number.replace("+", "")
+        
+        # Try WhatsApp desktop app with direct calling
+        try:
+            # Method 1a: Open WhatsApp chat without message to avoid sending text
+            whatsapp_chat_url = f"whatsapp://send?phone={wa_number}"
+            subprocess.run(f'start "" "{whatsapp_chat_url}"', shell=True, timeout=3)
+            time.sleep(4)  # Wait longer for WhatsApp to open and focus
+            
+            # Try to use keyboard automation to press the call shortcut
+            try:
+                import pyautogui
+                import win32gui
+                import win32con
+                
+                # Find WhatsApp window specifically
+                def find_whatsapp_window():
+                    def callback(hwnd, windows):
+                        if win32gui.IsWindowVisible(hwnd):
+                            window_title = win32gui.GetWindowText(hwnd)
+                            if 'whatsapp' in window_title.lower() or 'chat' in window_title.lower():
+                                windows.append(hwnd)
+                        return True
+                    
+                    windows = []
+                    win32gui.EnumWindows(callback, windows)
+                    return windows[0] if windows else None
+                
+                # Focus on WhatsApp window
+                whatsapp_hwnd = find_whatsapp_window()
+                if whatsapp_hwnd:
+                    win32gui.SetForegroundWindow(whatsapp_hwnd)
+                    win32gui.ShowWindow(whatsapp_hwnd, win32con.SW_RESTORE)
+                    time.sleep(1)
+                    
+                    # Now try the call shortcut while focused on WhatsApp
+                    pyautogui.hotkey('ctrl', 'shift', 'c')
+                    print(f"📱 WhatsApp call shortcut triggered for {phone_number}")
+                    success = True
+                    methods_tried.append("WhatsApp Desktop Auto - SUCCESS")
+                else:
+                    # Fallback - just use the shortcut without window focusing
+                    pyautogui.hotkey('ctrl', 'shift', 'c')
+                    print(f"📱 WhatsApp call shortcut attempted for {phone_number}")
+                    success = True
+                    methods_tried.append("WhatsApp Desktop Shortcut - SUCCESS")
+                    
+            except ImportError:
+                print(f"📱 WhatsApp opened for {phone_number}")
+                print("📞 Press Ctrl+Shift+C or click the call button (phone icon) in the chat header")
+                success = True
+                methods_tried.append("WhatsApp Desktop Manual - SUCCESS")
+            except Exception as e_auto:
+                print(f"📱 WhatsApp opened for {phone_number}")
+                print("📞 Click the call button (phone icon) in the chat header")
+                print(f"Note: {str(e_auto)}")
+                success = True
+                methods_tried.append("WhatsApp Desktop Click - SUCCESS")
+                
+        except Exception as e_desktop:
+            # Fallback to WhatsApp Web 
+            try:
+                whatsapp_url = f"https://web.whatsapp.com/send?phone={wa_number}"
+                webbrowser.open(whatsapp_url)
+                print(f"🌐 WhatsApp Web opened for {phone_number}")
+                print("📞 Wait for it to load, then click the phone icon in the chat header")
+                success = True
+                methods_tried.append("WhatsApp Web Manual - SUCCESS")
+                    
+            except Exception as e_web:
+                methods_tried.append(f"WhatsApp Web failed: {str(e_web)}")
+            
+    except Exception as e1:
+        methods_tried.append(f"WhatsApp failed: {str(e1)}")
+
+    # Method 2: Use Android Debug Bridge (ADB) as backup if WhatsApp fails
+    if not success:
+        try:
+            # Check if adb is available and device is connected
+            result = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=5)
+            
+            if 'device' in result.stdout and not 'offline' in result.stdout:
+                # Use ADB to initiate call on connected Android device
+                call_cmd = ['adb', 'shell', 'am', 'start', '-a', 'android.intent.action.CALL', 
+                           '-d', f'tel:{clean_number}']
+                result = subprocess.run(call_cmd, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0:
+                    print(f"✅ Emergency call initiated on Android device to {phone_number}")
+                    success = True
+                    methods_tried.append("Android ADB - SUCCESS")
+                else:
+                    methods_tried.append("Android ADB - Command failed")
+            else:
+                methods_tried.append("Android ADB - No device connected")
+                
+        except FileNotFoundError:
+            methods_tried.append("Android ADB - ADB not installed")
+        except Exception as e2:
+            methods_tried.append(f"Android ADB failed: {str(e2)}")
+
+    # Method 3: Use Google Voice web interface as final backup
+    if not success:
+        try:
+            # Try Google Voice web interface
+            google_voice_url = f"https://voice.google.com/u/0/calls?a=nc,%2B{clean_number.replace('+', '')}"
+            webbrowser.open(google_voice_url)
+            print(f"🌐 Google Voice opened in browser for {phone_number}")
+            print("📞 Click 'Call' in the Google Voice tab that opened")
+            success = True
+            methods_tried.append("Google Voice Web - SUCCESS")
+        except Exception as e3:
+            methods_tried.append(f"Google Voice Web failed: {str(e3)}")
+
+    # Fallback: Copy to clipboard and show setup instructions
+    try:
+        import pyperclip
+        pyperclip.copy(clean_number)
+        if success:
+            print(f"📋 Number {clean_number} copied to clipboard as backup")
+        else:
+            print(f"\n❌ EMERGENCY: All calling methods failed")
+            print(f"📋 Number copied to clipboard: {clean_number}")
+            print(f"\n🔧 For better automatic calling:")
+            print(f"   • Install WhatsApp Desktop from Microsoft Store")
+            print(f"   • Or install ADB tools and connect Android phone")
+            print(f"\n🚨 MANUAL ACTION: Please dial {phone_number} immediately!")
+        methods_tried.append("Clipboard backup")
+    except Exception as e_clip:
+        methods_tried.append(f"Clipboard backup failed: {str(e_clip)}")
+
+    print(f"🔍 Methods attempted: {', '.join([m.split(' - ')[0] for m in methods_tried])}")
+    
+    return success
 
 # Load words from CSV or fallback to NLTK
 def load_words_from_csv(csv_path, column_name="Word"):
@@ -104,9 +291,12 @@ class AutoCompleteSystem:
         return results[:3]
 
     def record_usage(self, word):
-        self.frequency[word] += 1
-        with open("usage_data.txt", "a") as f:
-            f.write(f"{word},{int(time.time())}\n")
+        # Only record single words (no spaces, reasonable length)
+        word = word.strip().lower()
+        if word and ' ' not in word and len(word) <= 20 and word.isalpha():
+            self.frequency[word] += 1
+            with open("usage_data.txt", "a") as f:
+                f.write(f"{word},{int(time.time())}\n")
 
     def load_usage_data(self, filename="usage_data.txt"):
         if not os.path.exists(filename):
@@ -114,20 +304,49 @@ class AutoCompleteSystem:
         with open(filename, "r") as f:
             for line in f:
                 if "," in line:
-                    word, _ = line.strip().split(",")
-                    self.frequency[word] += 1
-                    self.insert(word, root=self.csv_root)
+                    word, _ = line.strip().split(",", 1)  # Split only on first comma
+                    word = word.strip().lower()
+                    # Only load single words (no spaces, reasonable length, alphabetic)
+                    if word and ' ' not in word and len(word) <= 20 and word.isalpha():
+                        self.frequency[word] += 1
+                        self.insert(word, root=self.csv_root)
 
 class EyeTracker:
     def __init__(self, auto):
+        print("EyeTracker: Starting initialization...")
         self.auto = auto
+        print("EyeTracker: AutoComplete assigned")
+        
+        print("EyeTracker: Setting up MediaPipe...")
         self.mp_face_mesh = mp.solutions.face_mesh
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
-        )
+        print("EyeTracker: MediaPipe face_mesh module loaded")
+        
+        print("EyeTracker: Creating FaceMesh instance...")
+        try:
+            # Try creating MediaPipe with simpler settings first
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                max_num_faces=1,
+                refine_landmarks=False,  # Disable refine_landmarks to reduce complexity
+                min_detection_confidence=0.7,
+                min_tracking_confidence=0.7
+            )
+            print("EyeTracker: FaceMesh instance created successfully")
+        except Exception as e:
+            print(f"EyeTracker: Error creating FaceMesh: {e}")
+            print("EyeTracker: Trying with minimal settings...")
+            try:
+                self.face_mesh = self.mp_face_mesh.FaceMesh(
+                    max_num_faces=1,
+                    min_detection_confidence=0.5
+                )
+                print("EyeTracker: FaceMesh created with minimal settings")
+            except Exception as e2:
+                print(f"EyeTracker: Failed with minimal settings too: {e2}")
+                print("EyeTracker: MediaPipe might need to download models. Please wait...")
+                # Give it one more try after a delay
+                time.sleep(3)
+                self.face_mesh = self.mp_face_mesh.FaceMesh()
+                print("EyeTracker: FaceMesh created with default settings")
 
         self.morse_to_letter = {
             # Letters
@@ -141,9 +360,9 @@ class EyeTracker:
             '-----': '0', '.----': '1', '..---': '2', '...--': '3', '....-': '4',
             '.....': '5', '-....': '6', '--...': '7', '---..': '8', '----.': '9',
             # Special characters
-            '.-.-': 'ENTER', '.--.-': 'CAPS', '--': 'BACKSPACE', '......': 'SOS',
-            '..--': 'SPACE', '.---.': 'SELECT1', '..--.': 'SELECT2',
-            '.--..': 'SELECT3', '-.-.-': 'TTS_TOGGLE'
+            '.-.-': 'Enter', '.--.-': 'CapsLk', '--': 'Backspace', '......': 'Emergency SOS',
+            '..--': 'Space', '.---.': 'SELECT1', '..--.': 'SELECT2',
+            '.--..': 'SELECT3', '-.-.-': 'Text to Speech', '..-..': 'Clear'
         }
 
         self.LEFT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
@@ -174,6 +393,11 @@ class EyeTracker:
         self.message_history = []
         self.word_buffer = ""
         self.caps_lock = False
+        
+        # For keyboard highlighting
+        self.last_entered_char = None
+        self.highlight_timer = 0
+        self.highlight_duration = 1.0  # Show highlight for 1 second
 
         self.current_ear = 0
         self.current_area = 0
@@ -192,6 +416,134 @@ class EyeTracker:
         self.tts_enabled = False  # TTS toggle flag
         self.is_speaking = False  # Track if TTS is currently speaking
         self.speaking_message = ""  # Store the message being spoken
+        
+        # Load configuration for emergency contact
+        self.config = load_config()
+        self.emergency_contact = self.config.get("emergency_contact", "+91 6366011723")
+        print("EyeTracker: Initialization completed successfully!")
+
+    def draw_keyboard(self, width, height):
+        """Draw a dynamic keyboard using OpenCV"""
+        keyboard_img = np.zeros((height, width, 3), dtype=np.uint8)
+        keyboard_img[:] = (40, 40, 40)  # Dark gray background
+        
+        # Key dimensions for uniform layout
+        base_key_width = (width - 40) // 11  # Consistent key width
+        key_height = (height - 25) // 4 - 3   # 4 rows with proper spacing
+        margin_x = 3
+        margin_y = 3
+        
+        # Colors
+        normal_color = (80, 80, 80)      # Gray key
+        highlight_color = (0, 255, 0)    # Green highlight
+        text_color = (255, 255, 255)     # White text
+        highlight_text_color = (0, 0, 0) # Black text on highlighted key
+        
+        # Define each row separately - matching morse_keyboard.jpg reference
+        rows = [
+            # Row 0: Text to Speech and Numbers
+            [('-.-.-', 'Text to Speech'), ('.----', '1'), ('..---', '2'), ('...--', '3'), ('....-', '4'), 
+             ('.....', '5'), ('-....', '6'), ('--...', '7'), ('---..', '8'), ('----.', '9'), ('-----', '0')],
+            
+            # Row 1: QWERTYUIOP + Backspace
+            [('--.-', 'q'), ('.--', 'w'), ('.', 'e'), ('.-.', 'r'), ('-', 't'), 
+             ('-.--', 'y'), ('..-', 'u'), ('..', 'i'), ('---', 'o'), ('.--.', 'p'), ('--', 'Backspace')],
+            
+            # Row 2: CapsLk + ASDFGHJKL + Enter
+            [('.--.-', 'CapsLk'), ('.-', 'a'), ('...', 's'), ('-..', 'd'), ('..-.', 'f'), 
+             ('--.', 'g'), ('....', 'h'), ('.---', 'j'), ('-.-', 'k'), ('.-..', 'l'), ('.-.-', 'Enter')],
+            
+            # Row 3: Emergency SOS + ZXCVBNM + Clear + Space
+            [('......', 'Emergency SOS'), ('--..', 'z'), ('-..-', 'x'), ('-.-.', 'c'), ('...-', 'v'), 
+             ('-...', 'b'), ('-.', 'n'), ('----', 'm'), ('..-..', 'Clear'), ('..--', 'Space')]
+        ]
+        
+        for row_idx, row_keys in enumerate(rows):
+            current_x = margin_x
+            
+            for col_idx, (morse_code, display_text) in enumerate(row_keys):
+                # Uniform key width with special adjustments only for very long text
+                if display_text in ['Text to Speech', 'Emergency SOS']:
+                    key_width = int(base_key_width * 1.8)  # Wider for long text
+                elif display_text == 'Backspace':
+                    key_width = int(base_key_width * 1.3)  # Slightly wider
+                elif display_text == 'Space':
+                    key_width = int(base_key_width * 2.0)  # Wide space bar
+                else:
+                    key_width = base_key_width
+                
+                # Calculate key position
+                key_y = margin_y + row_idx * (key_height + margin_y)
+                
+                # Ensure we don't exceed bounds
+                if current_x + key_width > width - margin_x:
+                    key_width = width - current_x - margin_x
+                
+                # Check if this key should be highlighted
+                is_highlighted = (self.last_entered_char and 
+                                self.highlight_timer > 0 and 
+                                time.time() - self.highlight_timer < self.highlight_duration and
+                                ((morse_code in self.morse_to_letter and 
+                                  self.morse_to_letter[morse_code] == self.last_entered_char) or
+                                 (display_text == self.last_entered_char) or
+                                 (display_text == 'Backspace' and self.last_entered_char == 'Back')))
+                
+                # Draw key background
+                key_color = highlight_color if is_highlighted else normal_color
+                cv2.rectangle(keyboard_img, (current_x, key_y), (current_x + key_width, key_y + key_height), key_color, -1)
+                
+                # Draw key border
+                border_color = (200, 200, 200) if is_highlighted else (120, 120, 120)
+                cv2.rectangle(keyboard_img, (current_x, key_y), (current_x + key_width, key_y + key_height), border_color, 2)
+                
+                # Draw key text with appropriate sizing
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                if len(display_text) > 8:
+                    font_scale = 0.35  # Very small for long text
+                elif len(display_text) > 4:
+                    font_scale = 0.4   # Small for medium text
+                else:
+                    font_scale = 0.5   # Normal for short text
+                    
+                text_col = highlight_text_color if is_highlighted else text_color
+                
+                # Center text in key
+                (text_w, text_h), _ = cv2.getTextSize(display_text, font, font_scale, 1)
+                text_x = current_x + (key_width - text_w) // 2
+                text_y = key_y + (key_height + text_h) // 2 - 4
+                cv2.putText(keyboard_img, display_text, (text_x, text_y), font, font_scale, text_col, 1)
+                
+                # Draw morse code below (smaller font) - only for single characters
+                if morse_code and morse_code != display_text and len(morse_code) <= 6 and len(display_text) <= 3:
+                    morse_font_scale = 0.3
+                    (morse_w, morse_h), _ = cv2.getTextSize(morse_code, font, morse_font_scale, 1)
+                    morse_x = current_x + (key_width - morse_w) // 2
+                    morse_y = key_y + key_height - 4
+                    cv2.putText(keyboard_img, morse_code, (morse_x, morse_y), font, morse_font_scale, text_col, 1)
+                
+                # Move to next key position
+                current_x += key_width + margin_x
+        
+        return keyboard_img
+        if self.morse_char_buffer:
+            # Create a nice background for the morse display
+            text_bg_height = 40
+            cv2.rectangle(highlighted_img, (0, highlighted_img.shape[0] - text_bg_height), 
+                         (highlighted_img.shape[1], highlighted_img.shape[0]), (50, 50, 50), -1)
+            
+            # Show current morse pattern in large text
+            morse_text = f"Morse: {self.morse_char_buffer}"
+            cv2.putText(highlighted_img, morse_text, (10, highlighted_img.shape[0] - 15), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+            
+            # Show what character this would make (if it's a valid pattern)
+            if self.morse_char_buffer in self.morse_to_letter:
+                char = self.morse_to_letter[self.morse_char_buffer]
+                char_text = f"= {char}"
+                cv2.putText(highlighted_img, char_text, (300, highlighted_img.shape[0] - 15), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+        
+        return highlighted_img
 
     def calculate_eye_features(self, eye_landmarks, frame_width, frame_height):
         try:
@@ -266,8 +618,15 @@ class EyeTracker:
             self.is_speaking = False
             self.speaking_message = ""
 
+    def update_emergency_contact(self, new_number):
+        """Update the emergency contact number and save to config"""
+        self.emergency_contact = new_number
+        self.config["emergency_contact"] = new_number
+        save_config(self.config)
+        print(f"Emergency contact updated to: {new_number}")
+
     def process_special_character(self, char):
-        if char == 'ENTER':
+        if char == 'Enter':
             text_to_send = self.word_buffer[self.last_sent_len:]
             if text_to_send:
                 keyboard.write(text_to_send)
@@ -275,7 +634,12 @@ class EyeTracker:
             if self.word_buffer:
                 print(f"Message: {self.word_buffer}")
                 self.message_history.append(self.word_buffer)
-                self.auto.record_usage(self.word_buffer.lower())
+                
+                # Record usage for individual words only, not the entire sentence
+                words = self.word_buffer.strip().split()
+                for word in words:
+                    self.auto.record_usage(word.lower())
+                
                 self.last_word_printed = self.word_buffer
                 if self.tts_enabled:
                     message_to_speak = self.word_buffer  # Store before clearing
@@ -285,30 +649,56 @@ class EyeTracker:
             self.word_buffer = ""
             self.morse_char_buffer = ""
             self.last_sent_len = 0
-        elif char == 'SPACE':
+        elif char == 'Space':
             self.word_buffer += " "
             keyboard.send('space')
             self.morse_char_buffer = ""
             self.last_sent_len = len(self.word_buffer)
-        elif char == 'BACKSPACE':
+        elif char == 'Backspace':
             if self.word_buffer:
                 self.word_buffer = self.word_buffer[:-1]
                 keyboard.send('backspace')
             self.morse_char_buffer = ""
             self.last_sent_len = len(self.word_buffer)
-        elif char == 'CAPS':
+        elif char == 'CapsLk':
             self.caps_lock = not self.caps_lock
             self.morse_char_buffer = ""
-        elif char == 'SOS':
-            self.message_history.append("SOS")
+        elif char == 'Emergency SOS':
+            # Initiate emergency call
+            print("\n" + "="*50)
+            print("         🚨 SOS ACTIVATED 🚨")
+            print("="*50)
+            print("Initiating emergency call...")
+            
+            call_success = make_emergency_call(self.emergency_contact)
+            
+            self.message_history.append("SOS - Emergency call initiated")
+            keyboard.write(f'🚨 SOS EMERGENCY 🚨 - Contact: {self.emergency_contact}')
+            keyboard.send('enter')
+            
+            if self.tts_enabled:
+                if call_success:
+                    self.speak(f"S O S emergency activated. Multiple calling methods attempted for {self.emergency_contact}. Check your screen for instructions.")
+                else:
+                    self.speak("S O S emergency activated. Automatic calling failed. Manual intervention required. Check your screen immediately.")
+            else:
+                # Even if TTS is off, speak emergency message
+                self.speak(f"S O S emergency activated. Check your screen for calling instructions.")
+            
+            # Show emergency instructions on screen
+            print("\n🚨 EMERGENCY PROTOCOL ACTIVATED 🚨")
+            print(f"Emergency Contact: {self.emergency_contact}")
+            print("If no app opened automatically:")
+            print("1. Open your phone app manually")
+            print("2. The number should be in your clipboard")
+            print("3. Paste and call immediately")
+            print("4. Or dial the number manually")
+            print("="*50)
+            
             self.word_buffer = ""
             self.morse_char_buffer = ""
-            keyboard.write('SOS')
-            keyboard.send('enter')
             self.last_sent_len = len(self.word_buffer)
-            if self.tts_enabled:
-                self.speak("SOS")
-        elif char == 'TTS_TOGGLE':
+        elif char == 'Text to Speech':
             self.tts_enabled = not self.tts_enabled
             status = "ON" if self.tts_enabled else "OFF"
             print(f"TTS {status}")
@@ -317,6 +707,16 @@ class EyeTracker:
             else:
                 self.speak("No message")
             self.morse_char_buffer = ""
+        elif char == 'Clear':
+            # Clear the word buffer by sending backspaces for each character
+            if self.word_buffer:
+                for _ in range(len(self.word_buffer)):
+                    keyboard.send('backspace')
+                self.word_buffer = ""
+            self.morse_char_buffer = ""
+            self.last_sent_len = 0
+            if self.tts_enabled:
+                self.speak("Buffer cleared")
 
     def decode_morse_char(self):
         # Reset the flag at the beginning of decoding a new character
@@ -324,14 +724,17 @@ class EyeTracker:
 
         if self.morse_char_buffer in self.morse_to_letter:
             char = self.morse_to_letter[self.morse_char_buffer]
-            if char == 'TTS_TOGGLE':
+            if char == 'Text to Speech':
                 self.process_special_character(char)
                 self.key_sent_for_current_char = True
                 self.morse_char_buffer = ""
                 return char
-            if char in ['ENTER', 'SPACE', 'BACKSPACE', 'CAPS', 'SOS']:
+            if char in ['Enter', 'Space', 'Backspace', 'CapsLk', 'Emergency SOS', 'Clear']:
                 self.process_special_character(char)
                 self.key_sent_for_current_char = True # Mark as key sent
+                # Set highlighting for special characters
+                self.last_entered_char = char
+                self.highlight_timer = time.time()
             elif char.startswith("SELECT"):
                 index = int(char[-1]) - 1
                 if 0 <= index < len(self.current_suggestions):
@@ -365,6 +768,9 @@ class EyeTracker:
                 keyboard.write(char_to_add) # Only write the single new character
                 self.key_sent_for_current_char = True # Mark as key sent
                 self.last_sent_len = len(self.word_buffer) # Update sent length
+                # Set highlighting for normal characters
+                self.last_entered_char = char_to_add.upper()  # Always highlight as uppercase for consistency
+                self.highlight_timer = time.time()
             self.morse_char_buffer = ""
             return char
         else:
@@ -520,9 +926,19 @@ class EyeTracker:
         return frame
 
 def main():
+    print("Starting OptiBlink Eye Tracker...")
     cap = cv2.VideoCapture(0)
+    print("Camera initialized")
+    
+    if not cap.isOpened():
+        print("Error: Could not open camera")
+        return
+        
     auto = AutoCompleteSystem()
+    print("AutoComplete system loaded")
+    
     eye_tracker = EyeTracker(auto)
+    print("EyeTracker initialized")
 
     window_width = 650
     window_height = 450
@@ -540,13 +956,7 @@ def main():
             win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
                                   win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
 
-    keyboard_image_path = "morse_keyboard.jpg"
-    keyboard_img = cv2.imread(keyboard_image_path, cv2.IMREAD_UNCHANGED)
-
-    if keyboard_img is None:
-        print(f"Error: Could not load keyboard image from {keyboard_image_path}")
-        return
-
+    print("Starting main loop...")
     try:
         while True:
             ret, frame = cap.read()
@@ -571,11 +981,12 @@ def main():
 
             processed_video_frame = eye_tracker.process_frame(video_canvas)
 
-            resized_keyboard_img = cv2.resize(keyboard_img, (window_width, keyboard_height))
+            # Create dynamic keyboard with highlighting
+            keyboard_img = eye_tracker.draw_keyboard(window_width, keyboard_height)
 
             full_display_frame = np.zeros((window_height, window_width, 3), dtype=np.uint8)
             full_display_frame[0:video_height, 0:window_width] = processed_video_frame
-            full_display_frame[video_height:video_height+keyboard_height, 0:window_width] = resized_keyboard_img
+            full_display_frame[video_height:video_height+keyboard_height, 0:window_width] = keyboard_img
 
             cv2.imshow("Eye Blink Morse Code", full_display_frame)
             cv2.moveWindow("Eye Blink Morse Code", x_pos, y_pos)
@@ -600,4 +1011,10 @@ def main():
         cv2.destroyAllWindows()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Error occurred: {e}")
+        import traceback
+        traceback.print_exc()
+        input("Press Enter to continue...")
