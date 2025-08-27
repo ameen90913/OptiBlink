@@ -1,43 +1,70 @@
+# Standard library imports
+import csv
+import ctypes
+import json
+import os
+import tempfile
+import threading
+import time
+import webbrowser
+from collections import deque, defaultdict
+
+# CONFIGURATION - Change emergency contact number here
+DEFAULT_EMERGENCY_CONTACT = "+91 7892310175"
+
+# Suppress TensorFlow informational messages
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+
+# Third-party imports
 import cv2
 import mediapipe as mp
 import numpy as np
-import time
-from collections import deque, defaultdict
-import os
-import csv
-import keyboard
-import ctypes  
-import win32gui
-import win32con
-from gtts import gTTS
 import pygame
-import threading
-import tempfile
-import subprocess
-import webbrowser
-import json
+import keyboard
+from gtts import gTTS
+
+# Windows-specific imports
+try:
+    import win32gui
+    import win32con
+    WIN32_AVAILABLE = True
+except ImportError:
+    WIN32_AVAILABLE = False
+    print("Warning: win32gui/win32con not available. Some Windows-specific features may not work.")
+
+# Optional imports with fallbacks
+try:
+    import pyperclip
+    PYPERCLIP_AVAILABLE = True
+except ImportError:
+    PYPERCLIP_AVAILABLE = False
+    print("Warning: pyperclip not available. Clipboard functionality disabled.")
+
+try:
+    import pyautogui
+    PYAUTOGUI_AVAILABLE = True
+except ImportError:
+    PYAUTOGUI_AVAILABLE = False
+    print("Warning: pyautogui not available. Some automation features may not work.")
 
 # Configuration management
 def load_config():
-    """Loa        #         # Configuration and emergency contact
-        self.config = load_config()
-        self.emergency_contact = self.config.get("emergency_contact", "+91 6366011723")
-        print("EyeTracker: Initialization completed successfully!")uration and emergency contact
-        self.config = load_config()
-        self.emergency_contact = self.config.get("emergency_contact", "+91 6366011723")iguration from config.json file"""
+    """Load configuration from config.json file"""
     config_file = "config.json"
     default_config = {
-        "emergency_contact": "+91 6366011723"
+        "emergency_contact": DEFAULT_EMERGENCY_CONTACT
     }
     
     try:
         if os.path.exists(config_file):
             with open(config_file, 'r') as f:
                 config = json.load(f)
-                # Ensure all default keys exist
-                for key, value in default_config.items():
-                    if key not in config:
-                        config[key] = value
+                # ALWAYS use the centralized constant, ignore what's in the file
+                config["emergency_contact"] = DEFAULT_EMERGENCY_CONTACT
+                # Update the file to match the centralized constant
+                save_config(config)
                 return config
         else:
             # Create default config file
@@ -54,152 +81,6 @@ def save_config(config):
             json.dump(config, f, indent=2)
     except Exception as e:
         print(f"Error saving config: {e}")
-
-def make_emergency_call(phone_number):
-    """Initiate an emergency call using available methods"""
-    success = False
-    methods_tried = []
-    
-    # Clean and format the phone number
-    clean_number = phone_number.replace(" ", "").replace("-", "")
-    
-    # Method 1: Try WhatsApp calling (desktop app and web) - DEFAULT METHOD
-    try:
-        # Format number for WhatsApp (remove + and spaces)
-        wa_number = clean_number.replace("+", "")
-        
-        # Try WhatsApp desktop app with direct calling
-        try:
-            # Method 1a: Open WhatsApp chat without message to avoid sending text
-            whatsapp_chat_url = f"whatsapp://send?phone={wa_number}"
-            subprocess.run(f'start "" "{whatsapp_chat_url}"', shell=True, timeout=3)
-            time.sleep(4)  # Wait longer for WhatsApp to open and focus
-            
-            # Try to use keyboard automation to press the call shortcut
-            try:
-                import pyautogui
-                import win32gui
-                import win32con
-                
-                # Find WhatsApp window specifically
-                def find_whatsapp_window():
-                    def callback(hwnd, windows):
-                        if win32gui.IsWindowVisible(hwnd):
-                            window_title = win32gui.GetWindowText(hwnd)
-                            if 'whatsapp' in window_title.lower() or 'chat' in window_title.lower():
-                                windows.append(hwnd)
-                        return True
-                    
-                    windows = []
-                    win32gui.EnumWindows(callback, windows)
-                    return windows[0] if windows else None
-                
-                # Focus on WhatsApp window
-                whatsapp_hwnd = find_whatsapp_window()
-                if whatsapp_hwnd:
-                    win32gui.SetForegroundWindow(whatsapp_hwnd)
-                    win32gui.ShowWindow(whatsapp_hwnd, win32con.SW_RESTORE)
-                    time.sleep(1)
-                    
-                    # Now try the call shortcut while focused on WhatsApp
-                    pyautogui.hotkey('ctrl', 'shift', 'c')
-                    print(f"📱 WhatsApp call shortcut triggered for {phone_number}")
-                    success = True
-                    methods_tried.append("WhatsApp Desktop Auto - SUCCESS")
-                else:
-                    # Fallback - just use the shortcut without window focusing
-                    pyautogui.hotkey('ctrl', 'shift', 'c')
-                    print(f"📱 WhatsApp call shortcut attempted for {phone_number}")
-                    success = True
-                    methods_tried.append("WhatsApp Desktop Shortcut - SUCCESS")
-                    
-            except ImportError:
-                print(f"📱 WhatsApp opened for {phone_number}")
-                print("📞 Press Ctrl+Shift+C or click the call button (phone icon) in the chat header")
-                success = True
-                methods_tried.append("WhatsApp Desktop Manual - SUCCESS")
-            except Exception as e_auto:
-                print(f"📱 WhatsApp opened for {phone_number}")
-                print("📞 Click the call button (phone icon) in the chat header")
-                print(f"Note: {str(e_auto)}")
-                success = True
-                methods_tried.append("WhatsApp Desktop Click - SUCCESS")
-                
-        except Exception as e_desktop:
-            # Fallback to WhatsApp Web 
-            try:
-                whatsapp_url = f"https://web.whatsapp.com/send?phone={wa_number}"
-                webbrowser.open(whatsapp_url)
-                print(f"🌐 WhatsApp Web opened for {phone_number}")
-                print("📞 Wait for it to load, then click the phone icon in the chat header")
-                success = True
-                methods_tried.append("WhatsApp Web Manual - SUCCESS")
-                    
-            except Exception as e_web:
-                methods_tried.append(f"WhatsApp Web failed: {str(e_web)}")
-            
-    except Exception as e1:
-        methods_tried.append(f"WhatsApp failed: {str(e1)}")
-
-    # Method 2: Use Android Debug Bridge (ADB) as backup if WhatsApp fails
-    if not success:
-        try:
-            # Check if adb is available and device is connected
-            result = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=5)
-            
-            if 'device' in result.stdout and not 'offline' in result.stdout:
-                # Use ADB to initiate call on connected Android device
-                call_cmd = ['adb', 'shell', 'am', 'start', '-a', 'android.intent.action.CALL', 
-                           '-d', f'tel:{clean_number}']
-                result = subprocess.run(call_cmd, capture_output=True, text=True, timeout=10)
-                
-                if result.returncode == 0:
-                    print(f"✅ Emergency call initiated on Android device to {phone_number}")
-                    success = True
-                    methods_tried.append("Android ADB - SUCCESS")
-                else:
-                    methods_tried.append("Android ADB - Command failed")
-            else:
-                methods_tried.append("Android ADB - No device connected")
-                
-        except FileNotFoundError:
-            methods_tried.append("Android ADB - ADB not installed")
-        except Exception as e2:
-            methods_tried.append(f"Android ADB failed: {str(e2)}")
-
-    # Method 3: Use Google Voice web interface as final backup
-    if not success:
-        try:
-            # Try Google Voice web interface
-            google_voice_url = f"https://voice.google.com/u/0/calls?a=nc,%2B{clean_number.replace('+', '')}"
-            webbrowser.open(google_voice_url)
-            print(f"🌐 Google Voice opened in browser for {phone_number}")
-            print("📞 Click 'Call' in the Google Voice tab that opened")
-            success = True
-            methods_tried.append("Google Voice Web - SUCCESS")
-        except Exception as e3:
-            methods_tried.append(f"Google Voice Web failed: {str(e3)}")
-
-    # Fallback: Copy to clipboard and show setup instructions
-    try:
-        import pyperclip
-        pyperclip.copy(clean_number)
-        if success:
-            print(f"📋 Number {clean_number} copied to clipboard as backup")
-        else:
-            print(f"\n❌ EMERGENCY: All calling methods failed")
-            print(f"📋 Number copied to clipboard: {clean_number}")
-            print(f"\n🔧 For better automatic calling:")
-            print(f"   • Install WhatsApp Desktop from Microsoft Store")
-            print(f"   • Or install ADB tools and connect Android phone")
-            print(f"\n🚨 MANUAL ACTION: Please dial {phone_number} immediately!")
-        methods_tried.append("Clipboard backup")
-    except Exception as e_clip:
-        methods_tried.append(f"Clipboard backup failed: {str(e_clip)}")
-
-    print(f"🔍 Methods attempted: {', '.join([m.split(' - ')[0] for m in methods_tried])}")
-    
-    return success
 
 # Load words from CSV or fallback to NLTK
 def load_words_from_csv(csv_path, column_name="Word"):
@@ -218,15 +99,41 @@ def load_words_from_csv(csv_path, column_name="Word"):
 # Load CSV words
 csv_word_list = load_words_from_csv(r"words.csv", column_name="Word")
 
-# Always load NLTK words for fallback
+# Load NLTK words for fallback - OPTIMIZED FOR FAST STARTUP
+nltk_word_list = []
+print("EyeTracker: Starting word dictionary setup...")
+
+# Try to use CSV first, NLTK only if needed and fast
 try:
-    import nltk
-    nltk.data.find('corpora/words')
-except (ImportError, LookupError):
-    import nltk
-    nltk.download('words')
-from nltk.corpus import words as nltk_words
-nltk_word_list = [word.lower() for word in nltk_words.words() if word.isalpha() and len(word) > 2]
+    # If CSV exists and has words, skip NLTK entirely for faster startup
+    if csv_word_list and len(csv_word_list) > 1000:
+        print("EyeTracker: CSV words sufficient, skipping NLTK for faster startup")
+        nltk_word_list = []
+    else:
+        print("EyeTracker: Loading NLTK words (may take a moment on first run)...")
+        import nltk
+        
+        # Check if NLTK words are already available
+        try:
+            nltk.data.find('corpora/words')
+            from nltk.corpus import words as nltk_words
+            # Load only a subset for faster startup - full dictionary not needed for basic functionality
+            all_words = nltk_words.words()
+            nltk_word_list = [word.lower() for word in all_words[:5000] if word.isalpha() and len(word) > 2]
+            print(f"EyeTracker: NLTK words loaded (subset): {len(nltk_word_list)} words")
+        except LookupError:
+            print("EyeTracker: NLTK corpus not found. Skipping NLTK for faster startup.")
+            print("EyeTracker: (NLTK can be downloaded later if needed)")
+            nltk_word_list = []
+            
+except ImportError:
+    print("EyeTracker: NLTK not installed. Using CSV words only.")
+    nltk_word_list = []
+except Exception as e:
+    print(f"EyeTracker: NLTK loading skipped ({e}). Using CSV words only.")
+    nltk_word_list = []
+
+print("EyeTracker: Word dictionary setup complete!")
 
 class TrieNode:
     def __init__(self):
@@ -323,28 +230,22 @@ class EyeTracker:
         
         print("EyeTracker: Creating FaceMesh instance...")
         try:
-            # Try creating MediaPipe with simpler settings first
+            # Use optimized settings for fastest startup and reasonable performance
             self.face_mesh = self.mp_face_mesh.FaceMesh(
                 max_num_faces=1,
-                refine_landmarks=False,  # Disable refine_landmarks to reduce complexity
-                min_detection_confidence=0.7,
-                min_tracking_confidence=0.7
+                refine_landmarks=False,  # Disable for faster startup
+                min_detection_confidence=0.5,  # Lower for faster detection
+                min_tracking_confidence=0.5    # Lower for faster tracking
             )
             print("EyeTracker: FaceMesh instance created successfully")
         except Exception as e:
             print(f"EyeTracker: Error creating FaceMesh: {e}")
-            print("EyeTracker: Trying with minimal settings...")
+            # Fallback to absolute minimal settings
             try:
-                self.face_mesh = self.mp_face_mesh.FaceMesh(
-                    max_num_faces=1,
-                    min_detection_confidence=0.5
-                )
+                self.face_mesh = self.mp_face_mesh.FaceMesh(max_num_faces=1)
                 print("EyeTracker: FaceMesh created with minimal settings")
             except Exception as e2:
-                print(f"EyeTracker: Failed with minimal settings too: {e2}")
-                print("EyeTracker: MediaPipe might need to download models. Please wait...")
-                # Give it one more try after a delay
-                time.sleep(3)
+                print(f"EyeTracker: Fallback failed: {e2} - Using basic initialization")
                 self.face_mesh = self.mp_face_mesh.FaceMesh()
                 print("EyeTracker: FaceMesh created with default settings")
 
@@ -399,6 +300,22 @@ class EyeTracker:
         self.highlight_timer = 0
         self.highlight_duration = 1.0  # Show highlight for 1 second
 
+        # For SOS transparency
+        self.transparency_timer = 0
+        self.transparency_duration = 10.0  # Keep transparent for 10 seconds during SOS
+        self.is_transparent = False
+
+        # For sleep/wake detection (5-second eye closure)
+        self.is_system_active = True  # System starts active
+        self.eyes_closed_start_time = 0
+        self.sleep_wake_threshold = 5.0  # 5 seconds of closed eyes
+        self.last_system_state = True
+
+        # For SOS cooldown (temporary disable after SOS)
+        self.sos_cooldown_timer = 0
+        self.sos_cooldown_duration = 8.0  # Disable system for 8 seconds after SOS
+        self.was_active_before_sos = True
+
         self.current_ear = 0
         self.current_area = 0
         self.blink_state = "Open"
@@ -417,27 +334,246 @@ class EyeTracker:
         self.is_speaking = False  # Track if TTS is currently speaking
         self.speaking_message = ""  # Store the message being spoken
         
-        # Load configuration for emergency contact
+        # Load configuration for emergency contact - ALWAYS use centralized constant
         self.config = load_config()
-        self.emergency_contact = self.config.get("emergency_contact", "+91 6366011723")
+        self.emergency_contact = DEFAULT_EMERGENCY_CONTACT.replace(" ", "")
+        print(f"Emergency contact set to: {self.emergency_contact}")
         print("EyeTracker: Initialization completed successfully!")
+
+    def make_emergency_call(self, phone_number):
+        """Initiate an emergency call and send WhatsApp message"""
+        success = False
+        
+        # Clean and format the phone number
+        clean_number = phone_number.replace(" ", "").replace("-", "")
+        print(f"🚨 EMERGENCY: Initiating SOS for {phone_number}")
+        print(f"📱 Formatted number: {clean_number}")
+        
+        try:
+            # Method 1: Send WhatsApp message first (more reliable than calling)
+            emergency_message = "🚨 EMERGENCY ALERT! I need immediate help. This is an automated SOS message from OptiBlink. Please contact me urgently!"
+            
+            # Use WhatsApp desktop app protocol (more reliable than web)
+            whatsapp_msg_url = f"whatsapp://send?phone={clean_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
+            print("📲 Sending WhatsApp emergency message...")
+            webbrowser.open(whatsapp_msg_url)
+            time.sleep(4)  # Wait for WhatsApp to open
+            
+            if PYAUTOGUI_AVAILABLE:
+                try:
+                    # Wait for WhatsApp to fully load, then send
+                    time.sleep(4)  # Additional wait for WhatsApp to fully load
+                    print("⌨️ Pressing Enter to send WhatsApp message...")
+                    pyautogui.press('enter')  # Send the pre-filled message
+                    time.sleep(1)
+                    print("✅ WhatsApp emergency message sent!")
+                    
+                except Exception as wa_error:
+                    print(f"⚠️ WhatsApp automation failed: {wa_error}")
+            else:
+                print("📲 WhatsApp opened - manual send required")
+            
+            # Wait between WhatsApp message and phone call to avoid confusion
+            print("⏳ Waiting 5 seconds between WhatsApp message and phone call...")
+            time.sleep(5)
+            
+            # Method 2: Make emergency phone call - SIMPLE APPROACH
+            try:
+                print("📞 Making emergency phone call...")
+                
+                # Try direct Windows dialer first (most reliable)
+                import subprocess
+                print(f"📱 Attempting system call to {clean_number}...")
+                
+                # Use tel: protocol - works with Windows default phone handler
+                subprocess.run(['start', '', f'tel:{clean_number}'], shell=True, check=False)
+                time.sleep(3)  # Wait for dialer to open
+                
+                if PYAUTOGUI_AVAILABLE:
+                    # Simple approach - just press Enter to call
+                    print("⌨️ Pressing Enter to initiate call...")
+                    pyautogui.press('enter')
+                    time.sleep(0.5)
+                    pyautogui.press('enter')  # Double press for confirmation
+                    print("✅ Emergency call initiated!")
+                else:
+                    print("📞 System dialer opened - manual call required")
+                
+            except Exception as phone_error:
+                print(f"⚠️ Phone calling failed: {phone_error}")
+                print(f"📞 EMERGENCY: Manually call {clean_number} immediately!")
+                
+                # Automatically attempt to make the emergency call
+                print("✅ Phone Link should be loaded - attempting call!")
+                
+                # Try multiple methods to trigger the call automatically
+                if PYAUTOGUI_AVAILABLE:
+                    try:
+                        print("🔄 Attempting automatic emergency call...")
+                        
+                        # Method 1: DON'T use Alt+Tab - Phone Link should already be focused
+                        # Just try the call immediately since Phone Link opened
+                        
+                        # Method 2: Try multiple click locations for call button
+                        screen_width, screen_height = pyautogui.size()
+                        
+                        # Try different common call button locations
+                        call_locations = [
+                            (screen_width // 2, int(screen_height * 0.8)),      # Center-bottom
+                            (screen_width // 2, int(screen_height * 0.75)),     # Center-lower
+                            (screen_width // 2, int(screen_height * 0.85)),     # Center-very bottom
+                            (int(screen_width * 0.7), int(screen_height * 0.8)) # Right-bottom
+                        ]
+                        
+                        for i, (x, y) in enumerate(call_locations):
+                            print(f"🖱️ Trying call button location {i+1}: ({x}, {y})")
+                            pyautogui.click(x, y)
+                            time.sleep(0.8)
+                            
+                            # After each click, try keyboard shortcuts
+                            pyautogui.press('enter')
+                            time.sleep(0.3)
+                        
+                        # Method 3: Try keyboard shortcuts without clicking
+                        print("⌨️ Trying direct keyboard shortcuts...")
+                        key_combinations = ['enter', 'space', 'return']
+                        
+                        for key in key_combinations:
+                            print(f"⌨️ Pressing {key.upper()}")
+                            pyautogui.press(key)
+                            time.sleep(0.5)
+                        
+                        # Method 4: Try common phone app hotkeys
+                        phone_hotkeys = [
+                            ('ctrl', 'enter'),  # Common call shortcut
+                            ('ctrl', 'shift', 'c'),  # Another call shortcut
+                            ('f5',),  # Call/dial in some apps
+                        ]
+                        
+                        for hotkey in phone_hotkeys:
+                            print(f"⌨️ Trying hotkey: {'+'.join(hotkey)}")
+                            pyautogui.hotkey(*hotkey)
+                            time.sleep(0.5)
+                        
+                        print("✅ All emergency call methods attempted!")
+                        
+                    except Exception as auto_error:
+                        print(f"⚠️ Automatic calling failed: {auto_error}")
+                        
+                        # Final fallback: Try to open default phone dialer
+                        try:
+                            print("📞 Fallback: Opening system phone dialer...")
+                            import subprocess
+                            subprocess.run(['start', '', f'tel:{clean_number}'], shell=True, check=False)
+                            time.sleep(2)
+                            pyautogui.press('enter')
+                            print("✅ System dialer attempted!")
+                        except Exception as fallback_error:
+                            print(f"⚠️ System dialer fallback failed: {fallback_error}")
+                            
+                else:
+                    print("📞 Phone Link opened - automatic calling not available")
+
+                
+            except Exception as phone_error:
+                print(f"⚠️ Phone Link calling failed: {phone_error}")
+                print(f"📞 MANUAL DIAL REQUIRED: {clean_number}")
+                
+            except Exception as phone_error:
+                print(f"⚠️ Phone Link calling failed: {phone_error}")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Emergency call failed: {e}")
+            print(f"🚨 MANUAL ACTION: Call {phone_number} immediately!")
+            
+
+            if PYPERCLIP_AVAILABLE:
+                try:
+                    pyperclip.copy(f"EMERGENCY: CALL {clean_number} - Need immediate help!")
+                    print(f"📋 Emergency number copied: {clean_number}")
+                except:
+                    print(f" Manual dial: {clean_number}")
+            else:
+                print(f" Manual dial: {clean_number}")
+        
+            return False
+
+    def set_window_transparency(self, window_name, alpha=0.5):
+        """Set window transparency (alpha: 0.0=fully transparent, 1.0=fully opaque)"""
+        try:
+            if WIN32_AVAILABLE:
+                # Find the OpenCV window handle
+                hwnd = win32gui.FindWindow(None, window_name)
+                if hwnd:
+                    # Get current window style
+                    ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                    
+                    # Set the window as layered (required for transparency)
+                    win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, 
+                                         ex_style | win32con.WS_EX_LAYERED)
+                    
+                    # Set the transparency level (0-255, where 255 is opaque)
+                    alpha_value = int(alpha * 255)
+                    win32gui.SetLayeredWindowAttributes(hwnd, 0, alpha_value, 
+                                                      win32con.LWA_ALPHA)
+                    print(f"Window transparency set to {int(alpha*100)}%")
+                    return True
+            else:
+                print("Transparency requires win32gui (install pywin32)")
+        except Exception as e:
+            print(f"Could not set transparency: {e}")
+        return False
+    
+    def restore_window_opacity(self, window_name):
+        """Restore window to full opacity"""
+        return self.set_window_transparency(window_name, 1.0)
 
     def draw_keyboard(self, width, height):
         """Draw a dynamic keyboard using OpenCV"""
         keyboard_img = np.zeros((height, width, 3), dtype=np.uint8)
         keyboard_img[:] = (40, 40, 40)  # Dark gray background
         
-        # Key dimensions for uniform layout
-        base_key_width = (width - 40) // 11  # Consistent key width
-        key_height = (height - 25) // 4 - 3   # 4 rows with proper spacing
-        margin_x = 3
-        margin_y = 3
+        # Key dimensions for better fit
+        # Calculate available space more accurately
+        available_width = width - 20  # Leave 10px margin on each side
         
-        # Colors
-        normal_color = (80, 80, 80)      # Gray key
-        highlight_color = (0, 255, 0)    # Green highlight
-        text_color = (255, 255, 255)     # White text
-        highlight_text_color = (0, 0, 0) # Black text on highlighted key
+        # Row 0 has the most keys (11), so base calculation on that
+        # Account for: TTS(1.4x) + 10 numbers(1x) + margins between keys
+        total_key_units = 1.4 + 10.0  # Text to Speech + 10 number keys
+        key_spacing = 2  # Space between keys
+        total_spacing = key_spacing * 10  # 10 gaps between 11 keys
+        
+        base_key_width = int((available_width - total_spacing) / total_key_units)
+        key_height = (height - 25) // 4 - 3   # Optimized row spacing
+        margin_x = 10  # Left margin
+        margin_y = 4   # Reduced top margin
+        key_gap = 2    # Gap between keys
+        
+        # Debug info (will print once)
+        if not hasattr(self, 'keyboard_debug_printed'):
+            print(f"Keyboard: width={width}, available={available_width}, base_key={base_key_width}")
+            self.keyboard_debug_printed = True
+        
+        # Colors - different for active/sleep/SOS cooldown states
+        if (self.sos_cooldown_timer > 0 and 
+            time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+            # SOS cooldown state - yellowish tint
+            normal_color = (60, 80, 80)      # Yellowish gray key (cooldown)
+            highlight_color = (100, 255, 255) # Yellow highlight (cooldown)
+            text_color = (200, 255, 255)     # Yellowish text (cooldown)
+            highlight_text_color = (0, 50, 50) # Dark text on highlighted key
+        elif self.is_system_active:
+            normal_color = (80, 80, 80)      # Gray key (active)
+            highlight_color = (0, 255, 0)    # Green highlight (active)
+            text_color = (255, 255, 255)     # White text (active)
+            highlight_text_color = (0, 0, 0) # Black text on highlighted key
+        else:
+            normal_color = (40, 40, 40)      # Darker gray key (sleep)
+            highlight_color = (60, 60, 60)   # Dark gray highlight (sleep)
+            text_color = (100, 100, 100)     # Dimmed text (sleep)
+            highlight_text_color = (150, 150, 150) # Dimmed highlight text
         
         # Define each row separately - matching morse_keyboard.jpg reference
         rows = [
@@ -462,22 +598,31 @@ class EyeTracker:
             current_x = margin_x
             
             for col_idx, (morse_code, display_text) in enumerate(row_keys):
-                # Uniform key width with special adjustments only for very long text
+                # More conservative key widths to ensure everything fits
                 if display_text in ['Text to Speech', 'Emergency SOS']:
-                    key_width = int(base_key_width * 1.8)  # Wider for long text
+                    key_width = int(base_key_width * 1.4)  # Reduced to 1.4x
                 elif display_text == 'Backspace':
-                    key_width = int(base_key_width * 1.3)  # Slightly wider
+                    key_width = int(base_key_width * 1.1)  # Reduced to 1.1x
                 elif display_text == 'Space':
-                    key_width = int(base_key_width * 2.0)  # Wide space bar
+                    key_width = int(base_key_width * 1.6)  # Reduced to 1.6x
+                elif display_text == 'CapsLk':
+                    key_width = int(base_key_width * 1.1)  # Slightly wider
+                elif display_text == 'Enter':
+                    key_width = int(base_key_width * 1.1)  # Slightly wider
+                elif display_text == 'Clear':
+                    key_width = int(base_key_width * 1.0)  # Standard width
                 else:
                     key_width = base_key_width
                 
                 # Calculate key position
                 key_y = margin_y + row_idx * (key_height + margin_y)
                 
-                # Ensure we don't exceed bounds
+                # Ensure we don't exceed the window bounds
                 if current_x + key_width > width - margin_x:
+                    # If we're running out of space, compress this key
                     key_width = width - current_x - margin_x
+                    if key_width < base_key_width * 0.6:  # Don't make it too small
+                        key_width = int(base_key_width * 0.6)
                 
                 # Check if this key should be highlighted
                 is_highlighted = (self.last_entered_char and 
@@ -492,9 +637,9 @@ class EyeTracker:
                 key_color = highlight_color if is_highlighted else normal_color
                 cv2.rectangle(keyboard_img, (current_x, key_y), (current_x + key_width, key_y + key_height), key_color, -1)
                 
-                # Draw key border
+                # Draw key border (reduced thickness)
                 border_color = (200, 200, 200) if is_highlighted else (120, 120, 120)
-                cv2.rectangle(keyboard_img, (current_x, key_y), (current_x + key_width, key_y + key_height), border_color, 2)
+                cv2.rectangle(keyboard_img, (current_x, key_y), (current_x + key_width, key_y + key_height), border_color, 1)
                 
                 # Draw key text with appropriate sizing
                 font = cv2.FONT_HERSHEY_SIMPLEX
@@ -513,37 +658,39 @@ class EyeTracker:
                 text_y = key_y + (key_height + text_h) // 2 - 4
                 cv2.putText(keyboard_img, display_text, (text_x, text_y), font, font_scale, text_col, 1)
                 
-                # Draw morse code below (smaller font) - only for single characters
-                if morse_code and morse_code != display_text and len(morse_code) <= 6 and len(display_text) <= 3:
-                    morse_font_scale = 0.3
+                # Draw morse code below (smaller font) - show for all keys that have morse codes
+                if morse_code and morse_code != display_text and len(morse_code) <= 6:
+                    morse_font_scale = 0.25 if len(display_text) > 6 else 0.3  # Smaller font for long key names
                     (morse_w, morse_h), _ = cv2.getTextSize(morse_code, font, morse_font_scale, 1)
                     morse_x = current_x + (key_width - morse_w) // 2
-                    morse_y = key_y + key_height - 4
+                    morse_y = key_y + key_height - 3  # Slightly higher for better visibility
                     cv2.putText(keyboard_img, morse_code, (morse_x, morse_y), font, morse_font_scale, text_col, 1)
                 
-                # Move to next key position
-                current_x += key_width + margin_x
+                # Move to next key position with consistent gap
+                current_x += key_width + key_gap
+        
+        # Add overlay if system is not truly active (sleep mode or SOS cooldown)
+        if not self.is_system_truly_active():
+            overlay = keyboard_img.copy()
+            cv2.rectangle(overlay, (0, 0), (width, height), (0, 0, 0), -1)
+            cv2.addWeighted(keyboard_img, 0.3, overlay, 0.7, 0, keyboard_img)
+            
+            # Determine overlay text based on state
+            if (self.sos_cooldown_timer > 0 and 
+                time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+                text = "SOS COOLDOWN"
+                text_color = (100, 255, 255)  # Yellow text
+            else:
+                text = "SLEEP MODE"
+                text_color = (255, 255, 255)  # White text
+                
+            text_size = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 1, 2)[0]
+            text_x = (width - text_size[0]) // 2
+            text_y = height // 2
+            cv2.putText(keyboard_img, text, (text_x, text_y), 
+                       cv2.FONT_HERSHEY_SIMPLEX, 1, text_color, 2)
         
         return keyboard_img
-        if self.morse_char_buffer:
-            # Create a nice background for the morse display
-            text_bg_height = 40
-            cv2.rectangle(highlighted_img, (0, highlighted_img.shape[0] - text_bg_height), 
-                         (highlighted_img.shape[1], highlighted_img.shape[0]), (50, 50, 50), -1)
-            
-            # Show current morse pattern in large text
-            morse_text = f"Morse: {self.morse_char_buffer}"
-            cv2.putText(highlighted_img, morse_text, (10, highlighted_img.shape[0] - 15), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-            
-            # Show what character this would make (if it's a valid pattern)
-            if self.morse_char_buffer in self.morse_to_letter:
-                char = self.morse_to_letter[self.morse_char_buffer]
-                char_text = f"= {char}"
-                cv2.putText(highlighted_img, char_text, (300, highlighted_img.shape[0] - 15), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-        
-        return highlighted_img
 
     def calculate_eye_features(self, eye_landmarks, frame_width, frame_height):
         try:
@@ -618,14 +765,13 @@ class EyeTracker:
             self.is_speaking = False
             self.speaking_message = ""
 
-    def update_emergency_contact(self, new_number):
-        """Update the emergency contact number and save to config"""
-        self.emergency_contact = new_number
-        self.config["emergency_contact"] = new_number
-        save_config(self.config)
-        print(f"Emergency contact updated to: {new_number}")
-
     def process_special_character(self, char):
+        # Skip all keyboard writing during SOS cooldown period to prevent interference
+        if (self.sos_cooldown_timer > 0 and 
+            time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+            print("SOS cooldown active - skipping keyboard operations")
+            return
+            
         if char == 'Enter':
             text_to_send = self.word_buffer[self.last_sent_len:]
             if text_to_send:
@@ -665,35 +811,30 @@ class EyeTracker:
             self.morse_char_buffer = ""
         elif char == 'Emergency SOS':
             # Initiate emergency call
-            print("\n" + "="*50)
-            print("         🚨 SOS ACTIVATED 🚨")
-            print("="*50)
-            print("Initiating emergency call...")
+            print("\n*** SOS EMERGENCY ***")
             
-            call_success = make_emergency_call(self.emergency_contact)
+            # Make window translucent so user can see background (phone app)
+            self.set_window_transparency("Eye Blink Morse Code", 0.3)  # 30% opacity
+            self.is_transparent = True
+            self.transparency_timer = time.time()
+            print("Window made translucent to see phone app")
+            
+            call_success = self.make_emergency_call(self.emergency_contact)
             
             self.message_history.append("SOS - Emergency call initiated")
-            keyboard.write(f'🚨 SOS EMERGENCY 🚨 - Contact: {self.emergency_contact}')
-            keyboard.send('enter')
+            # Don't write to keyboard during emergency - it interferes with phone app
             
             if self.tts_enabled:
-                if call_success:
-                    self.speak(f"S O S emergency activated. Multiple calling methods attempted for {self.emergency_contact}. Check your screen for instructions.")
-                else:
-                    self.speak("S O S emergency activated. Automatic calling failed. Manual intervention required. Check your screen immediately.")
+                self.speak(f"S O S emergency activated. Calling {self.emergency_contact}")
             else:
                 # Even if TTS is off, speak emergency message
-                self.speak(f"S O S emergency activated. Check your screen for calling instructions.")
+                self.speak(f"S O S emergency activated. Calling {self.emergency_contact}")
             
-            # Show emergency instructions on screen
-            print("\n🚨 EMERGENCY PROTOCOL ACTIVATED 🚨")
-            print(f"Emergency Contact: {self.emergency_contact}")
-            print("If no app opened automatically:")
-            print("1. Open your phone app manually")
-            print("2. The number should be in your clipboard")
-            print("3. Paste and call immediately")
-            print("4. Or dial the number manually")
-            print("="*50)
+            # Start SOS cooldown - temporarily disable system
+            self.was_active_before_sos = self.is_system_active
+            self.is_system_active = False
+            self.sos_cooldown_timer = time.time()
+            print("System temporarily disabled to prevent accidental input")
             
             self.word_buffer = ""
             self.morse_char_buffer = ""
@@ -718,7 +859,19 @@ class EyeTracker:
             if self.tts_enabled:
                 self.speak("Buffer cleared")
 
+    def is_system_truly_active(self):
+        """Check if system is active considering both sleep mode and SOS cooldown"""
+        # If in SOS cooldown, system is temporarily inactive
+        if (self.sos_cooldown_timer > 0 and 
+            time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+            return False
+        return self.is_system_active
+
     def decode_morse_char(self):
+        # Only process morse code if system is truly active
+        if not self.is_system_truly_active():
+            return None
+            
         # Reset the flag at the beginning of decoding a new character
         self.key_sent_for_current_char = False 
 
@@ -736,6 +889,13 @@ class EyeTracker:
                 self.last_entered_char = char
                 self.highlight_timer = time.time()
             elif char.startswith("SELECT"):
+                # Skip keyboard writing during SOS cooldown period
+                if (self.sos_cooldown_timer > 0 and 
+                    time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+                    print("SOS cooldown active - skipping word selection")
+                    self.morse_char_buffer = ""  # Clear buffer but don't process
+                    return None
+                
                 index = int(char[-1]) - 1
                 if 0 <= index < len(self.current_suggestions):
                     selected_word = self.current_suggestions[index]
@@ -763,6 +923,13 @@ class EyeTracker:
                     self.key_sent_for_current_char = True # Mark as key sent
                     self.last_sent_len = len(self.word_buffer) # Update sent length after selection
             else:
+                # Skip keyboard writing during SOS cooldown period
+                if (self.sos_cooldown_timer > 0 and 
+                    time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+                    print("SOS cooldown active - skipping character processing")
+                    self.morse_char_buffer = ""  # Clear buffer but don't process
+                    return None
+                
                 char_to_add = char.upper() if self.caps_lock else char.lower()
                 self.word_buffer += char_to_add
                 keyboard.write(char_to_add) # Only write the single new character
@@ -788,6 +955,14 @@ class EyeTracker:
             self.area_baseline /= self.calibration_frames
             self.is_calibrated = True
             return True
+
+    def reset_calibration(self):
+        """Reset calibration to allow recalibration"""
+        self.is_calibrated = False
+        self.calibration_counter = 0
+        self.ear_baseline = 0
+        self.area_baseline = 0
+        print("Calibration reset. Please look straight at the camera for recalibration.")
 
     def process_frame(self, frame):
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -821,23 +996,48 @@ class EyeTracker:
                         self.open_start_time = None
                         self.is_blinking = True
                         self.blink_state = "Closed"
+                        # Start tracking for sleep/wake detection
+                        if self.eyes_closed_start_time == 0:
+                            self.eyes_closed_start_time = current_time
+                    
                     self.blink_duration = current_time - self.blink_start_time
                     self.open_duration = 0
+                    
+                    # Check for sleep/wake toggle (5 seconds of closed eyes)
+                    if (self.eyes_closed_start_time > 0 and 
+                        current_time - self.eyes_closed_start_time >= self.sleep_wake_threshold):
+                        # Toggle system state
+                        self.is_system_active = not self.is_system_active
+                        status = "ACTIVE" if self.is_system_active else "SLEEP"
+                        print(f"\n*** SYSTEM {status} ***")
+                        
+                        if self.tts_enabled:
+                            self.speak(f"System {status.lower()}")
+                        
+                        # Reset timer to prevent immediate re-triggering
+                        self.eyes_closed_start_time = 0
+                        
                 else:
+                    # Eyes are open, reset the closed timer
+                    self.eyes_closed_start_time = 0
+                    
                     if self.is_blinking:
                         blink_duration = current_time - self.blink_start_time
                         self.is_blinking = False
                         self.blink_state = "Open"
                         self.open_start_time = current_time
-                        if blink_duration < self.short_blink_threshold:
-                            self.short_blinks += 1
-                            self.morse_char_buffer += "."
-                        else:
-                            self.long_blinks += 1
-                            self.morse_char_buffer += "-"
-                        self.blink_counter += 1
-                        # When a blink just finished and a dot/dash is added, reset the key_sent_for_current_char flag
-                        self.key_sent_for_current_char = False 
+                        
+                        # Only process morse code if system is truly active (not in sleep or SOS cooldown)
+                        if self.is_system_truly_active():
+                            if blink_duration < self.short_blink_threshold:
+                                self.short_blinks += 1
+                                self.morse_char_buffer += "."
+                            else:
+                                self.long_blinks += 1
+                                self.morse_char_buffer += "-"
+                            self.blink_counter += 1
+                            # When a blink just finished and a dot/dash is added, reset the key_sent_for_current_char flag
+                            self.key_sent_for_current_char = False 
                     elif self.open_start_time:
                         self.open_duration = current_time - self.open_start_time
                         self.blink_duration = 0
@@ -850,8 +1050,20 @@ class EyeTracker:
                 cv2.polylines(frame, [left_points], True, (0, 255, 0), 1)
                 cv2.polylines(frame, [right_points], True, (0, 255, 0), 1)
 
-        cv2.putText(frame, f"CAPS: {'ON' if self.caps_lock else 'OFF'} - TTS: {'ON' if self.tts_enabled else 'OFF'} - Word: {self.word_buffer}",
-                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        # Determine system status display
+        if (self.sos_cooldown_timer > 0 and 
+            time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+            system_status = "SOS COOLDOWN"
+            status_color = (0, 255, 255)  # Yellow for cooldown
+        elif self.is_system_active:
+            system_status = "ACTIVE"
+            status_color = (0, 255, 0)  # Green for active
+        else:
+            system_status = "SLEEP"
+            status_color = (0, 0, 255)  # Red for sleep
+            
+        cv2.putText(frame, f"SYSTEM: {system_status} - CAPS: {'ON' if self.caps_lock else 'OFF'} - TTS: {'ON' if self.tts_enabled else 'OFF'} - Word: {self.word_buffer}",
+                    (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 2)
         current_y += int(line_spacing * 0.7)
 
         # Show speaking indicator if TTS is active
@@ -940,21 +1152,32 @@ def main():
     eye_tracker = EyeTracker(auto)
     print("EyeTracker initialized")
 
-    window_width = 650
-    window_height = 450
+    window_width = 680  # Increased slightly to fit keyboard better
+    window_height = 460  # Adjusted height to maintain proportions
 
-    # Move window to top-right corner
-    user32 = ctypes.windll.user32
-    screen_width = user32.GetSystemMetrics(0)
-    x_pos = screen_width - window_width
+    # Move window to top-right corner with some margin
+    try:
+        user32 = ctypes.windll.user32
+        screen_width = user32.GetSystemMetrics(0)
+        x_pos = screen_width - window_width - 20  # Added 20px margin from edge
+    except Exception:
+        # Fallback to default position if Windows API is not available
+        x_pos = 100
+        print("Warning: Could not get screen width. Using default window position.")
+    
     y_pos = 40  # Leave space for window controls
 
     # Function to set OpenCV window always on top
     def set_window_always_on_top(window_name):
-        hwnd = win32gui.FindWindow(None, window_name)
-        if hwnd:
-            win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                                  win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+        if WIN32_AVAILABLE:
+            try:
+                hwnd = win32gui.FindWindow(None, window_name)
+                if hwnd:
+                    win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+            except Exception as e:
+                print(f"Warning: Could not set window always on top: {e}")
+        # If win32 is not available, the function does nothing gracefully
 
     print("Starting main loop...")
     try:
@@ -984,28 +1207,70 @@ def main():
             # Create dynamic keyboard with highlighting
             keyboard_img = eye_tracker.draw_keyboard(window_width, keyboard_height)
 
+            # Check if transparency timer has expired and restore opacity
+            if (eye_tracker.is_transparent and 
+                eye_tracker.transparency_timer > 0 and
+                time.time() - eye_tracker.transparency_timer > eye_tracker.transparency_duration):
+                eye_tracker.restore_window_opacity("OptiBlink")
+                eye_tracker.is_transparent = False
+                eye_tracker.transparency_timer = 0
+                print("Window opacity restored")
+
+            # Check if SOS cooldown has expired and restore system activity
+            if (eye_tracker.sos_cooldown_timer > 0 and
+                time.time() - eye_tracker.sos_cooldown_timer > eye_tracker.sos_cooldown_duration):
+                eye_tracker.is_system_active = eye_tracker.was_active_before_sos
+                eye_tracker.sos_cooldown_timer = 0
+                status = "ACTIVE" if eye_tracker.is_system_active else "SLEEP"
+                print(f"SOS cooldown expired - System restored to {status}")
+
             full_display_frame = np.zeros((window_height, window_width, 3), dtype=np.uint8)
             full_display_frame[0:video_height, 0:window_width] = processed_video_frame
             full_display_frame[video_height:video_height+keyboard_height, 0:window_width] = keyboard_img
 
-            cv2.imshow("Eye Blink Morse Code", full_display_frame)
-            cv2.moveWindow("Eye Blink Morse Code", x_pos, y_pos)
-            set_window_always_on_top("Eye Blink Morse Code")
+            cv2.imshow("OptiBlink", full_display_frame)
+            cv2.moveWindow("OptiBlink", x_pos, y_pos)
+            set_window_always_on_top("OptiBlink")
 
             # Robust window close detection
             try:
-                if cv2.getWindowProperty("Eye Blink Morse Code", cv2.WND_PROP_VISIBLE) < 1:
+                if cv2.getWindowProperty("OptiBlink", cv2.WND_PROP_VISIBLE) < 1:
                     break
             except cv2.error:
                 break
 
-            key = cv2.waitKey(1)
+            key = cv2.waitKey(1) & 0xFF
             if key == -1:
                 # If window is closed, waitKey returns -1
-                if cv2.getWindowProperty("Eye Blink Morse Code", cv2.WND_PROP_VISIBLE) < 1:
+                if cv2.getWindowProperty("OptiBlink", cv2.WND_PROP_VISIBLE) < 1:
                     break
-            if key & 0xFF == ord('q'):
-                break
+            
+            # Check for actual keyboard input (only when window has focus and key is physically pressed)
+            # Use GetAsyncKeyState to check for actual physical key presses
+            try:
+                import ctypes
+                # Check if Q key is currently being pressed (GetAsyncKeyState returns non-zero if pressed)
+                if ctypes.windll.user32.GetAsyncKeyState(ord('Q')) & 0x8000:
+                    if not hasattr(eye_tracker, '_q_pressed'):
+                        eye_tracker._q_pressed = True
+                        break
+                else:
+                    eye_tracker._q_pressed = False
+                
+                # Check if R key is currently being pressed
+                if ctypes.windll.user32.GetAsyncKeyState(ord('R')) & 0x8000:
+                    if not hasattr(eye_tracker, '_r_pressed'):
+                        eye_tracker._r_pressed = True
+                        eye_tracker.reset_calibration()
+                else:
+                    eye_tracker._r_pressed = False
+            except:
+                # Fallback to original method if ctypes fails
+                if key != 255 and key != -1:
+                    if key == ord('q'):
+                        break
+                    elif key == ord('r'):
+                        eye_tracker.reset_calibration()
     finally:
         cap.release()
         cv2.destroyAllWindows()

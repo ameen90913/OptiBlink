@@ -7,5 +7,3 @@ pywin32
 gtts
 pygame
 pyperclip
-# Optional for automatic emergency calling:
-# twilio
