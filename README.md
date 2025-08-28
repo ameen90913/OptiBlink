@@ -14,6 +14,7 @@ OptiBlink is an innovative assistive technology solution designed to help paraly
 - **Real-time Eye Tracking**: Advanced computer vision using MediaPipe for precise eye landmark detection
 - **Blink Detection**: Sophisticated algorithm to detect and differentiate between intentional and natural blinks
 - **Morse Code Translation**: Converts blink patterns into text using Morse code system
+- **Emergency SOS System**: Critical safety feature for medical emergencies using SOS Morse pattern
 - **Auto-completion**: Intelligent word suggestions using Trie data structure and frequency analysis
 - **Text-to-Speech**: Built-in speech synthesis for auditory feedback
 - **Customizable Interface**: Adjustable sensitivity and calibration options
@@ -91,8 +92,14 @@ The system will automatically download required NLTK data on first run.
 
 - **Auto-completion**: Type partial words and select from suggestions
 - **Voice Feedback**: Enable text-to-speech for auditory confirmation
+- **Emergency SOS**: Use SOS Morse pattern to send WhatsApp message and initiate phone call to configured emergency contact
 - **Customization**: Adjust blink sensitivity and timing parameters
 - **Usage Tracking**: System learns from your typing patterns
+
+### Keyboard Controls
+
+- **Q Key**: Exit the application
+- **R Key**: Recalibrate eye detection system
 
 ## 📁 Project Structure
 
@@ -100,10 +107,10 @@ The system will automatically download required NLTK data on first run.
 OptiBlink/
 ├── eye_tracker.py          # Main application file
 ├── requirements.txt        # Python dependencies
+├── config.json            # Emergency contact configuration
 ├── words.csv              # Custom word dictionary
 ├── usage_data.txt         # Usage analytics data
 ├── morse_keyboard.jpg     # Morse code reference image
-├── test.py                # Testing utilities
 └── README.md              # Project documentation
 ```
 
@@ -118,13 +125,6 @@ OptiBlink/
 - Add custom words to `words.csv` for domain-specific vocabulary
 - System automatically loads and prioritizes custom words
 - Fallback to NLTK dictionary for comprehensive coverage
-
-## 🧪 Testing
-
-Run the test suite to verify system functionality:
-```bash
-python test.py
-```
 
 ## 📊 Performance
 
@@ -157,8 +157,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **OptiBlink** was developed by:
 
-- **[Ameen Muhammed Jumah](https://www.linkedin.com/in/ameen-muhammed-jumah-45844b271)** - Program Developer
-- **[Deepika S](https://www.linkedin.com/in/deepika-s-7494a7258/)** - UI/UX Design & Optimisation
+- **[Ameen Muhammed Jumah](https://www.linkedin.com/in/ameen-muhammed-jumah-45844b271)** - Lead Program Developer
+- **[Deepika S](https://www.linkedin.com/in/deepika-s-7494a7258/)** - UI/UX Design & Optimization
 - **[Jeslin Philip](http://linkedin.com/in/jeslin-philip-965783301)** - Word Suggestion System Developer
 - **[B Thanvi Sheetal](https://www.linkedin.com/in/thanvi-sheetal-779a22265/)** - Keyboard Integration & Testing
 
@@ -174,12 +174,11 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 For support, questions, or feature requests:
 
 - Create an issue on GitHub
-- Email: support@optiblink.com
 - Documentation: [Wiki](https://github.com/your-username/OptiBlink/wiki)
+- Contact creators
 
 ## 🔮 Roadmap
 
-- [ ] Mobile app version for iOS/Android
 - [ ] Integration with popular communication platforms
 - [ ] Advanced gesture recognition
 - [ ] Cloud-based word learning
@@ -187,10 +186,12 @@ For support, questions, or feature requests:
 
 ## 📈 Statistics
 
-- **Lines of Code**: 600+
-- **Dependencies**: 8 core libraries
+- **Lines of Code**: 1,200+ (main application)
+- **Dependencies**: 9 core libraries
+- **Features**: 10+ major features including emergency system
 - **Supported Languages**: English (expandable)
-- **Test Coverage**: 85%+
+- **Emergency Response**: WhatsApp + Phone call integration
+- **Window Management**: Always-on-top with recalibration support
 
 ---
 

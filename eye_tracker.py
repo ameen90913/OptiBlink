@@ -15,6 +15,9 @@ DEFAULT_EMERGENCY_CONTACT = "+91 9632168509"
 # WINDOW CONFIGURATION
 WINDOW_NAME = "OptiBlink"
 
+
+
+
 # Suppress TensorFlow informational messages
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
