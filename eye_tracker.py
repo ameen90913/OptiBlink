@@ -10,7 +10,10 @@ import webbrowser
 from collections import deque, defaultdict
 
 # CONFIGURATION - Change emergency contact number here
-DEFAULT_EMERGENCY_CONTACT = "+91 7892310175"
+DEFAULT_EMERGENCY_CONTACT = "+91 9632168509"
+
+# WINDOW CONFIGURATION
+WINDOW_NAME = "OptiBlink"
 
 # Suppress TensorFlow informational messages
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
@@ -363,6 +366,22 @@ class EyeTracker:
                 try:
                     # Wait for WhatsApp to fully load, then send
                     time.sleep(4)  # Additional wait for WhatsApp to fully load
+                    
+                    # Try to bring WhatsApp window to front
+                    if WIN32_AVAILABLE:
+                        try:
+                            # Look for WhatsApp window and bring it to front
+                            whatsapp_window = win32gui.FindWindow(None, "WhatsApp")
+                            if whatsapp_window == 0:
+                                # Try alternative window titles
+                                whatsapp_window = win32gui.FindWindow(None, "WhatsApp Desktop")
+                            if whatsapp_window != 0:
+                                win32gui.SetForegroundWindow(whatsapp_window)
+                                print("🔄 Switched to WhatsApp window")
+                                time.sleep(1)  # Wait for window to come to front
+                        except Exception as switch_error:
+                            print(f"⚠️ Could not switch to WhatsApp window: {switch_error}")
+                    
                     print("⌨️ Pressing Enter to send WhatsApp message...")
                     pyautogui.press('enter')  # Send the pre-filled message
                     time.sleep(1)
@@ -813,11 +832,11 @@ class EyeTracker:
             # Initiate emergency call
             print("\n*** SOS EMERGENCY ***")
             
-            # Make window translucent so user can see background (phone app)
-            self.set_window_transparency("Eye Blink Morse Code", 0.3)  # 30% opacity
+            # Make window more visible during emergency (higher opacity than normal)
+            self.set_window_transparency(WINDOW_NAME, 0.95)  # 95% opacity for high visibility during SOS
             self.is_transparent = True
             self.transparency_timer = time.time()
-            print("Window made translucent to see phone app")
+            print("Window opacity increased for emergency visibility")
             
             call_success = self.make_emergency_call(self.emergency_contact)
             
@@ -1152,18 +1171,23 @@ def main():
     eye_tracker = EyeTracker(auto)
     print("EyeTracker initialized")
 
-    window_width = 680  # Increased slightly to fit keyboard better
-    window_height = 460  # Adjusted height to maintain proportions
+    window_width = 800  # Made bigger for better visibility
+    window_height = 550  # Made bigger for better visibility
 
     # Move window to top-right corner with some margin
     try:
         user32 = ctypes.windll.user32
         screen_width = user32.GetSystemMetrics(0)
-        x_pos = screen_width - window_width - 20  # Added 20px margin from edge
-    except Exception:
+        screen_height = user32.GetSystemMetrics(1)
+        x_pos = screen_width - window_width - 30  # Increased margin for larger window
+        print(f"Screen dimensions: {screen_width}x{screen_height}")
+        print(f"Window size: {window_width}x{window_height}")
+        print(f"Calculated position: x={x_pos}, y=40")
+        print(f"This should place window at top-right corner with 30px margin")
+    except Exception as e:
         # Fallback to default position if Windows API is not available
         x_pos = 100
-        print("Warning: Could not get screen width. Using default window position.")
+        print(f"Warning: Could not get screen dimensions: {e}. Using default window position.")
     
     y_pos = 40  # Leave space for window controls
 
@@ -1173,13 +1197,40 @@ def main():
             try:
                 hwnd = win32gui.FindWindow(None, window_name)
                 if hwnd:
+                    # Set as topmost window that stays above all other windows
                     win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
-                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE)
+                                          win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+                    
+                    # Additionally, ensure window is visible and not minimized
+                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+                    return True
             except Exception as e:
                 print(f"Warning: Could not set window always on top: {e}")
-        # If win32 is not available, the function does nothing gracefully
+                return False
+        return False
+        
+    # Function to force window to top-right position and topmost
+    def force_window_position_and_topmost(window_name, x, y):
+        if WIN32_AVAILABLE:
+            try:
+                hwnd = win32gui.FindWindow(None, window_name)
+                if hwnd:
+                    # Force position and make topmost in one call
+                    win32gui.SetWindowPos(hwnd, win32con.HWND_TOPMOST, x, y, 0, 0,
+                                        win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW)
+                    return True
+            except Exception as e:
+                print(f"Warning: Could not force window position: {e}")
+                return False
+        return False
 
     print("Starting main loop...")
+    
+    # Variables for window positioning
+    window_positioned = False
+    position_attempts = 0
+    max_position_attempts = 10
+    
     try:
         while True:
             ret, frame = cap.read()
@@ -1211,10 +1262,10 @@ def main():
             if (eye_tracker.is_transparent and 
                 eye_tracker.transparency_timer > 0 and
                 time.time() - eye_tracker.transparency_timer > eye_tracker.transparency_duration):
-                eye_tracker.restore_window_opacity("OptiBlink")
+                eye_tracker.set_window_transparency(WINDOW_NAME, 0.85)  # Restore to permanent transparency
                 eye_tracker.is_transparent = False
                 eye_tracker.transparency_timer = 0
-                print("Window opacity restored")
+                print("Window opacity restored to normal transparency")
 
             # Check if SOS cooldown has expired and restore system activity
             if (eye_tracker.sos_cooldown_timer > 0 and
@@ -1228,13 +1279,61 @@ def main():
             full_display_frame[0:video_height, 0:window_width] = processed_video_frame
             full_display_frame[video_height:video_height+keyboard_height, 0:window_width] = keyboard_img
 
-            cv2.imshow("OptiBlink", full_display_frame)
-            cv2.moveWindow("OptiBlink", x_pos, y_pos)
-            set_window_always_on_top("OptiBlink")
+            cv2.imshow(WINDOW_NAME, full_display_frame)
+            
+            # Position window in top-right corner (only try for first few frames)
+            if not window_positioned and position_attempts < max_position_attempts:
+                position_attempts += 1
+                print(f"Positioning attempt {position_attempts}: trying to move to ({x_pos}, {y_pos})")
+                
+                # First, try OpenCV positioning (works immediately)
+                cv2.moveWindow(WINDOW_NAME, x_pos, y_pos)
+                
+                # Then, force position and topmost with Windows API
+                if force_window_position_and_topmost(WINDOW_NAME, x_pos, y_pos):
+                    # Verify the position
+                    try:
+                        hwnd = win32gui.FindWindow(None, WINDOW_NAME)
+                        if hwnd:
+                            rect = win32gui.GetWindowRect(hwnd)
+                            current_x, current_y = rect[0], rect[1]
+                            print(f"Window positioned at ({current_x}, {current_y}), target was ({x_pos}, {y_pos})")
+                            
+                            if abs(current_x - x_pos) < 50 and abs(current_y - y_pos) < 50:
+                                window_positioned = True
+                                print("Window successfully positioned in top-right corner!")
+                    except Exception as verify_error:
+                        print(f"Could not verify position: {verify_error}")
+                else:
+                    print(f"Attempt {position_attempts}: Windows API positioning failed")
+                        
+                # If we've tried enough times, stop trying
+                if position_attempts >= max_position_attempts:
+                    window_positioned = True
+                    print("Window positioning attempts completed")
+            
+            # Continuously enforce always-on-top behavior (every 10 frames to avoid performance impact)
+            frame_count = getattr(eye_tracker, '_frame_count', 0) + 1
+            eye_tracker._frame_count = frame_count
+            
+            if frame_count % 10 == 0:  # Every 10 frames (roughly every 0.3 seconds)
+                success = set_window_always_on_top(WINDOW_NAME)
+                if not success and frame_count % 50 == 0:  # Report failures every 50 frames
+                    print("Warning: Could not maintain always-on-top status")
+            
+            # Additional enforcement every 30 frames - reposition if needed
+            if frame_count % 30 == 0 and window_positioned:
+                force_window_position_and_topmost(WINDOW_NAME, x_pos, y_pos)
+            
+            # Set permanent transparency (allow users to see behind the window)
+            if not hasattr(eye_tracker, '_permanent_transparency_set'):
+                eye_tracker.set_window_transparency(WINDOW_NAME, 0.85)  # 85% opacity permanently
+                eye_tracker._permanent_transparency_set = True
+                print(f"Window positioned at top-right corner: ({x_pos}, {y_pos})")
 
             # Robust window close detection
             try:
-                if cv2.getWindowProperty("OptiBlink", cv2.WND_PROP_VISIBLE) < 1:
+                if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
                     break
             except cv2.error:
                 break
@@ -1242,24 +1341,26 @@ def main():
             key = cv2.waitKey(1) & 0xFF
             if key == -1:
                 # If window is closed, waitKey returns -1
-                if cv2.getWindowProperty("OptiBlink", cv2.WND_PROP_VISIBLE) < 1:
+                if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
                     break
             
             # Check for actual keyboard input (only when window has focus and key is physically pressed)
             # Use GetAsyncKeyState to check for actual physical key presses
             try:
-                import ctypes
                 # Check if Q key is currently being pressed (GetAsyncKeyState returns non-zero if pressed)
-                if ctypes.windll.user32.GetAsyncKeyState(ord('Q')) & 0x8000:
-                    if not hasattr(eye_tracker, '_q_pressed'):
+                q_pressed = (ctypes.windll.user32.GetAsyncKeyState(ord('Q')) & 0x8000) or (ctypes.windll.user32.GetAsyncKeyState(ord('q')) & 0x8000)
+                if q_pressed:
+                    if not hasattr(eye_tracker, '_q_pressed') or not eye_tracker._q_pressed:
                         eye_tracker._q_pressed = True
+                        print("Q key pressed - exiting program")
                         break
                 else:
                     eye_tracker._q_pressed = False
                 
                 # Check if R key is currently being pressed
-                if ctypes.windll.user32.GetAsyncKeyState(ord('R')) & 0x8000:
-                    if not hasattr(eye_tracker, '_r_pressed'):
+                r_pressed = (ctypes.windll.user32.GetAsyncKeyState(ord('R')) & 0x8000) or (ctypes.windll.user32.GetAsyncKeyState(ord('r')) & 0x8000)
+                if r_pressed:
+                    if not hasattr(eye_tracker, '_r_pressed') or not eye_tracker._r_pressed:
                         eye_tracker._r_pressed = True
                         eye_tracker.reset_calibration()
                 else:
