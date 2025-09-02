@@ -3,6 +3,7 @@ import csv
 import ctypes
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
@@ -268,7 +269,7 @@ class EyeTracker:
             '.....': '5', '-....': '6', '--...': '7', '---..': '8', '----.': '9',
             # Special characters
             '.-.-': 'Enter', '.--.-': 'CapsLk', '--': 'Backspace', '......': 'Emergency SOS',
-            '..--': 'Space', '.---.': 'SELECT1', '..--.': 'SELECT2',
+            '...-...': 'Phone Call', '..--': 'Space', '.---.': 'SELECT1', '..--.': 'SELECT2',
             '.--..': 'SELECT3', '-.-.-': 'Text to Speech', '..-..': 'Clear'
         }
 
@@ -348,7 +349,6 @@ class EyeTracker:
 
     def make_emergency_call(self, phone_number):
         """Initiate an emergency call and send WhatsApp message"""
-        success = False
         
         # Clean and format the phone number
         clean_number = phone_number.replace(" ", "").replace("-", "")
@@ -356,153 +356,171 @@ class EyeTracker:
         print(f"📱 Formatted number: {clean_number}")
         
         try:
-            # Method 1: Send WhatsApp message first (more reliable than calling)
+            # Method 1: Send WhatsApp message with improved reliability
             emergency_message = "🚨 EMERGENCY ALERT! I need immediate help. This is an automated SOS message from OptiBlink. Please contact me urgently!"
             
-            # Use WhatsApp desktop app protocol (more reliable than web)
-            whatsapp_msg_url = f"whatsapp://send?phone={clean_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
             print("📲 Sending WhatsApp emergency message...")
+            whatsapp_msg_url = f"whatsapp://send?phone={clean_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
+            print(f"🔗 WhatsApp URL: {whatsapp_msg_url}")
             webbrowser.open(whatsapp_msg_url)
-            time.sleep(4)  # Wait for WhatsApp to open
+            time.sleep(8)  # Even longer wait for WhatsApp to fully load
             
             if PYAUTOGUI_AVAILABLE:
                 try:
-                    # Wait for WhatsApp to fully load, then send
-                    time.sleep(4)  # Additional wait for WhatsApp to fully load
+                    # Focus on WhatsApp and send message immediately
+                    print("🔄 Focusing on WhatsApp window...")
+                    if WIN32_AVAILABLE:
+                        # Find WhatsApp window specifically
+                        try:
+                            def find_whatsapp():
+                                def enum_callback(hwnd, windows):
+                                    if win32gui.IsWindowVisible(hwnd):
+                                        title = win32gui.GetWindowText(hwnd).lower()
+                                        if 'whatsapp' in title and len(title) > 0:
+                                            windows.append((hwnd, win32gui.GetWindowText(hwnd)))
+                                    return True
+                                
+                                windows = []
+                                win32gui.EnumWindows(enum_callback, windows)
+                                return windows[0] if windows else (0, "")
+                            
+                            whatsapp_hwnd, whatsapp_title = find_whatsapp()
+                            if whatsapp_hwnd != 0:
+                                print(f"📱 Found WhatsApp: {whatsapp_title}")
+                                win32gui.SetForegroundWindow(whatsapp_hwnd)
+                                time.sleep(2)
+                                print("✅ WhatsApp window focused!")
+                            else:
+                                print("⚠️ WhatsApp window not found, using Alt+Tab")
+                                pyautogui.hotkey('alt', 'tab')
+                                time.sleep(2)
+                        except Exception as wa_focus_error:
+                            print(f"⚠️ WhatsApp focus failed, using Alt+Tab: {wa_focus_error}")
+                            pyautogui.hotkey('alt', 'tab')
+                            time.sleep(2)
                     
-                    # Try to bring WhatsApp window to front
+                    # Send WhatsApp message immediately
+                    print("⌨️ Sending WhatsApp message NOW...")
+                    for i in range(3):
+                        pyautogui.press('enter')
+                        time.sleep(0.3)
+                        print(f"⌨️ WhatsApp Enter {i+1}/3")
+                    print("✅ WhatsApp message sent!")
+                    print("� Switching to WhatsApp using Alt+Tab...")
+                    pyautogui.hotkey('alt', 'tab')
+                    time.sleep(2)
+                    
+                    # Check if we're in WhatsApp by looking at window title
                     if WIN32_AVAILABLE:
                         try:
-                            # Look for WhatsApp window and bring it to front
-                            whatsapp_window = win32gui.FindWindow(None, "WhatsApp")
-                            if whatsapp_window == 0:
-                                # Try alternative window titles
-                                whatsapp_window = win32gui.FindWindow(None, "WhatsApp Desktop")
-                            if whatsapp_window != 0:
-                                win32gui.SetForegroundWindow(whatsapp_window)
-                                print("🔄 Switched to WhatsApp window")
-                                time.sleep(1)  # Wait for window to come to front
-                        except Exception as switch_error:
-                            print(f"⚠️ Could not switch to WhatsApp window: {switch_error}")
+                            current_window = win32gui.GetForegroundWindow()
+                            current_title = win32gui.GetWindowText(current_window).lower()
+                            print(f"🔍 Current window: {current_title}")
+                            
+                            if 'whatsapp' not in current_title:
+                                # Try Alt+Tab again
+                                print("🔄 Trying Alt+Tab again...")
+                                pyautogui.hotkey('alt', 'tab')
+                                time.sleep(2)
+                                current_window = win32gui.GetForegroundWindow()
+                                current_title = win32gui.GetWindowText(current_window).lower()
+                                print(f"🔍 After second Alt+Tab: {current_title}")
+                        except Exception as title_error:
+                            print(f"⚠️ Could not check window title: {title_error}")
                     
-                    print("⌨️ Pressing Enter to send WhatsApp message...")
-                    pyautogui.press('enter')  # Send the pre-filled message
-                    time.sleep(1)
-                    print("✅ WhatsApp emergency message sent!")
+                    # Send WhatsApp message with multiple attempts
+                    print("⌨️ Sending WhatsApp message...")
+                    for i in range(3):  # Try 3 times
+                        pyautogui.press('enter')
+                        time.sleep(0.5)
+                        print(f"⌨️ Enter press {i+1}/3 for WhatsApp")
+                    print("✅ WhatsApp message sending attempted!")
+                    
+                    # Verify if message was sent by checking if we can find input field
+                    try:
+                        current_window = win32gui.GetForegroundWindow()
+                        current_title = win32gui.GetWindowText(current_window)
+                        print(f"🔍 Current focused window: {current_title}")
+                    except:
+                        pass
                     
                 except Exception as wa_error:
                     print(f"⚠️ WhatsApp automation failed: {wa_error}")
+                    print("🔄 Trying manual Alt+Tab method...")
+                    try:
+                        pyautogui.hotkey('alt', 'tab')
+                        time.sleep(2)
+                        pyautogui.press('enter')
+                        pyautogui.press('enter')
+                        print("🔄 Alt+Tab fallback attempted")
+                    except:
+                        print("⚠️ Alt+Tab fallback also failed")
             else:
-                print("📲 WhatsApp opened - manual send required")
+                print("📲 WhatsApp opened - pyautogui not available, manual send required")
             
-            # Wait between WhatsApp message and phone call to avoid confusion
-            print("⏳ Waiting 5 seconds between WhatsApp message and phone call...")
-            time.sleep(5)
+            # Wait between WhatsApp and phone call
+            print("⏳ Waiting 2 seconds before making call...")
+            time.sleep(2)
             
-            # Method 2: Make emergency phone call - SIMPLE APPROACH
+            # Method 2: Simple phone call using tel: protocol
             try:
                 print("📞 Making emergency phone call...")
                 
-                # Try direct Windows dialer first (most reliable)
-                import subprocess
-                print(f"📱 Attempting system call to {clean_number}...")
-                
-                # Use tel: protocol - works with Windows default phone handler
+                # Use generic tel: protocol (works with default phone handler)
+                print(f"📱 Dialing {clean_number} using system dialer...")
                 subprocess.run(['start', '', f'tel:{clean_number}'], shell=True, check=False)
-                time.sleep(3)  # Wait for dialer to open
+                
+                # Wait for dialer to load completely
+                print("⏳ Waiting for dialer to load...")
+                time.sleep(3)
                 
                 if PYAUTOGUI_AVAILABLE:
-                    # Simple approach - just press Enter to call
-                    print("⌨️ Pressing Enter to initiate call...")
-                    pyautogui.press('enter')
-                    time.sleep(0.5)
-                    pyautogui.press('enter')  # Double press for confirmation
-                    print("✅ Emergency call initiated!")
-                else:
-                    print("📞 System dialer opened - manual call required")
-                
-            except Exception as phone_error:
-                print(f"⚠️ Phone calling failed: {phone_error}")
-                print(f"📞 EMERGENCY: Manually call {clean_number} immediately!")
-                
-                # Automatically attempt to make the emergency call
-                print("✅ Phone Link should be loaded - attempting call!")
-                
-                # Try multiple methods to trigger the call automatically
-                if PYAUTOGUI_AVAILABLE:
-                    try:
-                        print("🔄 Attempting automatic emergency call...")
-                        
-                        # Method 1: DON'T use Alt+Tab - Phone Link should already be focused
-                        # Just try the call immediately since Phone Link opened
-                        
-                        # Method 2: Try multiple click locations for call button
-                        screen_width, screen_height = pyautogui.size()
-                        
-                        # Try different common call button locations
-                        call_locations = [
-                            (screen_width // 2, int(screen_height * 0.8)),      # Center-bottom
-                            (screen_width // 2, int(screen_height * 0.75)),     # Center-lower
-                            (screen_width // 2, int(screen_height * 0.85)),     # Center-very bottom
-                            (int(screen_width * 0.7), int(screen_height * 0.8)) # Right-bottom
-                        ]
-                        
-                        for i, (x, y) in enumerate(call_locations):
-                            print(f"🖱️ Trying call button location {i+1}: ({x}, {y})")
-                            pyautogui.click(x, y)
-                            time.sleep(0.8)
-                            
-                            # After each click, try keyboard shortcuts
-                            pyautogui.press('enter')
-                            time.sleep(0.3)
-                        
-                        # Method 3: Try keyboard shortcuts without clicking
-                        print("⌨️ Trying direct keyboard shortcuts...")
-                        key_combinations = ['enter', 'space', 'return']
-                        
-                        for key in key_combinations:
-                            print(f"⌨️ Pressing {key.upper()}")
-                            pyautogui.press(key)
-                            time.sleep(0.5)
-                        
-                        # Method 4: Try common phone app hotkeys
-                        phone_hotkeys = [
-                            ('ctrl', 'enter'),  # Common call shortcut
-                            ('ctrl', 'shift', 'c'),  # Another call shortcut
-                            ('f5',),  # Call/dial in some apps
-                        ]
-                        
-                        for hotkey in phone_hotkeys:
-                            print(f"⌨️ Trying hotkey: {'+'.join(hotkey)}")
-                            pyautogui.hotkey(*hotkey)
-                            time.sleep(0.5)
-                        
-                        print("✅ All emergency call methods attempted!")
-                        
-                    except Exception as auto_error:
-                        print(f"⚠️ Automatic calling failed: {auto_error}")
-                        
-                        # Final fallback: Try to open default phone dialer
+                    # Focus specifically on Phone Link and call immediately
+                    print("🔄 Focusing on Phone Link window...")
+                    if WIN32_AVAILABLE:
                         try:
-                            print("📞 Fallback: Opening system phone dialer...")
-                            import subprocess
-                            subprocess.run(['start', '', f'tel:{clean_number}'], shell=True, check=False)
-                            time.sleep(2)
-                            pyautogui.press('enter')
-                            print("✅ System dialer attempted!")
-                        except Exception as fallback_error:
-                            print(f"⚠️ System dialer fallback failed: {fallback_error}")
+                            def find_phone_link():
+                                def enum_callback(hwnd, windows):
+                                    if win32gui.IsWindowVisible(hwnd):
+                                        title = win32gui.GetWindowText(hwnd).lower()
+                                        phone_keywords = ['phone link', 'your phone', 'phone', 'dialer', 'call']
+                                        if any(keyword in title for keyword in phone_keywords) and len(title) > 0:
+                                            windows.append((hwnd, win32gui.GetWindowText(hwnd)))
+                                    return True
+                                
+                                windows = []
+                                win32gui.EnumWindows(enum_callback, windows)
+                                return windows[0] if windows else (0, "")
                             
+                            phone_hwnd, phone_title = find_phone_link()
+                            if phone_hwnd != 0:
+                                print(f"📱 Found Phone app: {phone_title}")
+                                win32gui.SetForegroundWindow(phone_hwnd)
+                                time.sleep(2)
+                                print("✅ Phone app window focused!")
+                            else:
+                                print("⚠️ Phone app window not found, using Alt+Tab")
+                                pyautogui.hotkey('alt', 'tab')
+                                time.sleep(2)
+                        except Exception as phone_focus_error:
+                            print(f"⚠️ Phone focus failed, using Alt+Tab: {phone_focus_error}")
+                            pyautogui.hotkey('alt', 'tab')
+                            time.sleep(2)
+                    
+                    # Call immediately while Phone Link is focused
+                    print("⌨️ Starting call sequence NOW...")
+                    for i in range(5):
+                        time.sleep(0.8)
+                        pyautogui.press('enter')
+                        print(f"⌨️ Phone Enter {i+1}/5")
+                    print("✅ Call sequence completed!")
+                    
                 else:
-                    print("📞 Phone Link opened - automatic calling not available")
-
+                    print("📞 Phone dialer opened - pyautogui not available, manual call required")
                 
             except Exception as phone_error:
-                print(f"⚠️ Phone Link calling failed: {phone_error}")
-                print(f"📞 MANUAL DIAL REQUIRED: {clean_number}")
-                
-            except Exception as phone_error:
-                print(f"⚠️ Phone Link calling failed: {phone_error}")
+                print(f"⚠️ Phone dialer failed: {phone_error}")
+                print(f"📞 EMERGENCY: Manually call {clean_number} immediately!")
             
             return True
             
@@ -510,16 +528,94 @@ class EyeTracker:
             print(f"❌ Emergency call failed: {e}")
             print(f"🚨 MANUAL ACTION: Call {phone_number} immediately!")
             
-
+            # Copy number to clipboard as last resort
             if PYPERCLIP_AVAILABLE:
                 try:
-                    pyperclip.copy(f"EMERGENCY: CALL {clean_number} - Need immediate help!")
-                    print(f"📋 Emergency number copied: {clean_number}")
+                    pyperclip.copy(f"EMERGENCY: CALL {clean_number}")
+                    print(f"📋 Emergency number copied to clipboard: {clean_number}")
                 except:
-                    print(f" Manual dial: {clean_number}")
+                    print(f"📞 Manual dial required: {clean_number}")
             else:
-                print(f" Manual dial: {clean_number}")
+                print(f"📞 Manual dial required: {clean_number}")
+            
+            return False
+
+    def make_direct_emergency_call(self, phone_number):
+        """Make a direct emergency phone call without WhatsApp message"""
         
+        # Clean and format the phone number
+        clean_number = phone_number.replace(" ", "").replace("-", "")
+        print(f"📞 DIRECT EMERGENCY CALL: {phone_number}")
+        print(f"📱 Formatted number: {clean_number}")
+        
+        try:
+            # Direct phone call using tel: protocol
+            print("📞 Making direct emergency phone call...")
+            
+            # Use generic tel: protocol (works with default phone handler)
+            print(f"📱 Dialing {clean_number} using system dialer...")
+            subprocess.run(['start', '', f'tel:{clean_number}'], shell=True, check=False)
+            
+            # Wait for dialer to load completely
+            print("⏳ Waiting for dialer to load...")
+            time.sleep(3)
+            
+            if PYAUTOGUI_AVAILABLE:
+                # Focus specifically on Phone Link and call immediately
+                print("🔄 Focusing on Phone Link window...")
+                if WIN32_AVAILABLE:
+                    try:
+                        # Find Phone Link window specifically
+                        def find_phone_link():
+                            def enum_callback(hwnd, windows):
+                                if win32gui.IsWindowVisible(hwnd):
+                                    title = win32gui.GetWindowText(hwnd).lower()
+                                    if ('phone' in title and 'link' in title) or 'your phone' in title:
+                                        windows.append((hwnd, win32gui.GetWindowText(hwnd)))
+                                return True
+                            
+                            windows = []
+                            win32gui.EnumWindows(enum_callback, windows)
+                            return windows[0] if windows else (0, "")
+                        
+                        phone_hwnd, phone_title = find_phone_link()
+                        if phone_hwnd != 0:
+                            print(f"📱 Found Phone Link: {phone_title}")
+                            win32gui.SetForegroundWindow(phone_hwnd)
+                            time.sleep(2)
+                            print("✅ Phone Link window focused!")
+                            
+                            # Press Enter multiple times to initiate the call
+                            print("⌨️ Pressing Enter to call...")
+                            for i in range(5):  # More attempts for phone calls
+                                pyautogui.press('enter')
+                                time.sleep(0.4)
+                                print(f"⌨️ Call attempt {i+1}/5")
+                            print("✅ Emergency call initiated!")
+                            return True
+                        else:
+                            print("⚠️ Phone Link not found, call may need manual confirmation")
+                    except Exception as call_error:
+                        print(f"⚠️ Direct call automation failed: {call_error}")
+                        print("📞 Phone dialer opened - manual call confirmation may be required")
+            else:
+                print("📞 Phone dialer opened - pyautogui not available, manual confirmation required")
+            
+            return True
+            
+        except Exception as e:
+            print(f"❌ Emergency call failed: {e}")
+            
+            # Copy number to clipboard as fallback
+            if PYPERCLIP_AVAILABLE:
+                try:
+                    pyperclip.copy(f"EMERGENCY CALL: {clean_number}")
+                    print(f"📋 Emergency number copied to clipboard: {clean_number}")
+                except:
+                    print(f"📞 Manual dial required: {clean_number}")
+            else:
+                print(f"📞 Manual dial required: {clean_number}")
+            
             return False
 
     def set_window_transparency(self, window_name, alpha=0.5):
@@ -714,6 +810,134 @@ class EyeTracker:
         
         return keyboard_img
 
+    def draw_phone_icon(self, width, height):
+        """Draw a phone icon using call_icon.png for emergency calling"""
+        # Create a larger area for the phone icon so morse code is visible
+        icon_height = 90
+        icon_width = 90
+        
+        try:
+            # Load the call icon PNG file
+            icon_path = "call_icon.png"
+            if os.path.exists(icon_path):
+                # Load the PNG image with alpha channel support
+                call_icon = cv2.imread(icon_path, cv2.IMREAD_UNCHANGED)
+                
+                if call_icon is not None:
+                    # Resize the icon to fit our dimensions (leave space for morse code)
+                    icon_size = 70  # Bigger icon to better match morse text size
+                    call_icon_resized = cv2.resize(call_icon, (icon_size, icon_size))
+                    
+                    # Create transparent/clear background instead of colored background
+                    if (self.sos_cooldown_timer > 0 and 
+                        time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+                        bg_color = (40, 40, 40)  # Dark neutral background
+                        text_color = (255, 255, 0)  # Yellow text for cooldown
+                        border_color = (255, 255, 0)  # Yellow border
+                    elif self.is_system_active:
+                        bg_color = (40, 40, 40)  # Dark neutral background
+                        text_color = (0, 255, 0)  # Green text when active
+                        border_color = (0, 255, 0)  # Green border when active
+                    else:
+                        bg_color = (40, 40, 40)  # Dark neutral background
+                        text_color = (150, 150, 150)  # Light gray text
+                        border_color = (100, 100, 100)  # Gray border
+                    
+                    # Create neutral dark background (no colored background)
+                    icon_img = np.full((icon_height, icon_width, 3), bg_color, dtype=np.uint8)
+                    
+                    # Center the phone icon in the top part
+                    icon_y_offset = 5
+                    icon_x_offset = (icon_width - icon_size) // 2
+                    
+                    # Handle transparency if the PNG has an alpha channel
+                    if call_icon_resized.shape[2] == 4:  # RGBA
+                        # Blend the icon with neutral background using alpha channel
+                        alpha = call_icon_resized[:, :, 3] / 255.0
+                        for c in range(3):
+                            icon_img[icon_y_offset:icon_y_offset+icon_size, 
+                                   icon_x_offset:icon_x_offset+icon_size, c] = (
+                                alpha * call_icon_resized[:, :, c] + 
+                                (1 - alpha) * bg_color[c])
+                    else:
+                        # RGB image, use directly
+                        icon_img[icon_y_offset:icon_y_offset+icon_size, 
+                               icon_x_offset:icon_x_offset+icon_size] = call_icon_resized
+                    
+                    # Add border for visibility (only border, no background fill)
+                    cv2.rectangle(icon_img, (0, 0), (icon_width-1, icon_height-1), border_color, 2)
+                    
+                    # Add morse code text below the icon with bigger, more visible font
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    morse_text = "...-..."
+                    font_scale = 0.6  # Bigger font for better visibility
+                    thickness = 2  # Thicker text for visibility
+                    
+                    # Get text size and center it
+                    (morse_w, morse_h), baseline = cv2.getTextSize(morse_text, font, font_scale, thickness)
+                    morse_x = (icon_width - morse_w) // 2
+                    morse_y = icon_height - 8  # Position near bottom with padding
+                    
+                    # Add the morse code text directly on background
+                    cv2.putText(icon_img, morse_text, (morse_x, morse_y), font, font_scale, 
+                              text_color, thickness)  # Use colored text based on system state
+                    
+                    return icon_img
+            
+            # Fallback: if PNG not found or failed to load, create text-based icon
+            print("Warning: call_icon.png not found, using text fallback")
+            
+        except Exception as e:
+            print(f"Error loading call_icon.png: {e}, using text fallback")
+        
+        # Fallback text-based icon with neutral background and bigger morse text
+        icon_img = np.zeros((icon_height, icon_width, 3), dtype=np.uint8)
+        
+        # Colors based on system state - neutral background with colored text/borders
+        if (self.sos_cooldown_timer > 0 and 
+            time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
+            icon_color = (40, 40, 40)  # Dark neutral background
+            text_color = (255, 255, 0)  # Yellow text for cooldown
+            border_color = (255, 255, 0)  # Yellow border
+        elif self.is_system_active:
+            icon_color = (40, 40, 40)  # Dark neutral background
+            text_color = (0, 255, 0)  # Green text when active
+            border_color = (0, 255, 0)  # Green border
+        else:
+            icon_color = (40, 40, 40)  # Dark neutral background
+            text_color = (150, 150, 150)  # Light gray text
+            border_color = (100, 100, 100)  # Gray border
+        
+        # Fill with neutral dark background (no colored background)
+        icon_img[:] = icon_color
+        
+        # Draw border only (no background fill)
+        cv2.rectangle(icon_img, (0, 0), (icon_width-1, icon_height-1), border_color, 2)
+        
+        # Draw "CALL" text in upper part
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        phone_text = "CALL"
+        font_scale = 0.7  # Bigger font for the main text
+        thickness = 2
+        (text_w, text_h), baseline = cv2.getTextSize(phone_text, font, font_scale, thickness)
+        text_x = (icon_width - text_w) // 2
+        text_y = (icon_height // 2) - 5
+        cv2.putText(icon_img, phone_text, (text_x, text_y), font, font_scale, text_color, thickness)
+        
+        # Draw morse code below with bigger font for better visibility
+        morse_text = "...-..."
+        morse_font_scale = 0.6  # Bigger font for visibility
+        morse_thickness = 2  # Thicker text for visibility
+        (morse_w, morse_h), morse_baseline = cv2.getTextSize(morse_text, font, morse_font_scale, morse_thickness)
+        morse_x = (icon_width - morse_w) // 2
+        morse_y = icon_height - 8
+        
+        # Add morse code text directly on background
+        cv2.putText(icon_img, morse_text, (morse_x, morse_y), font, morse_font_scale, 
+                  text_color, morse_thickness)  # Use the same colored text as system state
+        
+        return icon_img
+
     def calculate_eye_features(self, eye_landmarks, frame_width, frame_height):
         try:
             points = np.array([
@@ -848,6 +1072,23 @@ class EyeTracker:
             
             if self.tts_enabled:
                 self.speak(f"S O S emergency activated. Calling {self.emergency_contact}")
+        elif char == 'Phone Call':
+            # Direct emergency phone call (skip WhatsApp message)
+            print("\n*** EMERGENCY PHONE CALL ***")
+            
+            # Make window more visible during emergency
+            self.set_window_transparency(WINDOW_NAME, 0.95)  # 95% opacity for high visibility
+            self.is_transparent = True
+            self.transparency_timer = time.time()
+            print("Window opacity increased for emergency call visibility")
+            
+            # Direct phone call only (no WhatsApp message)
+            call_success = self.make_direct_emergency_call(self.emergency_contact)
+            
+            self.message_history.append("Emergency phone call initiated")
+            
+            if self.tts_enabled:
+                self.speak(f"Emergency call to {self.emergency_contact}")
             else:
                 # Even if TTS is off, speak emergency message
                 self.speak(f"S O S emergency activated. Calling {self.emergency_contact}")
@@ -904,7 +1145,7 @@ class EyeTracker:
                 self.key_sent_for_current_char = True
                 self.morse_char_buffer = ""
                 return char
-            if char in ['Enter', 'Space', 'Backspace', 'CapsLk', 'Emergency SOS', 'Clear']:
+            if char in ['Enter', 'Space', 'Backspace', 'CapsLk', 'Emergency SOS', 'Phone Call', 'Clear']:
                 self.process_special_character(char)
                 self.key_sent_for_current_char = True # Mark as key sent
                 # Set highlighting for special characters
@@ -1281,6 +1522,18 @@ def main():
             full_display_frame = np.zeros((window_height, window_width, 3), dtype=np.uint8)
             full_display_frame[0:video_height, 0:window_width] = processed_video_frame
             full_display_frame[video_height:video_height+keyboard_height, 0:window_width] = keyboard_img
+            
+            # Add phone icon in bottom right of video area (above keyboard)
+            phone_icon = eye_tracker.draw_phone_icon(90, 90)
+            icon_height, icon_width = phone_icon.shape[:2]
+            icon_y_start = video_height - icon_height - 5  # 5 pixels above keyboard
+            icon_y_end = video_height - 5
+            icon_x_start = window_width - icon_width - 5  # 5 pixels from right edge
+            icon_x_end = window_width - 5
+            
+            # Ensure we don't go out of bounds
+            if icon_y_start >= 0 and icon_x_start >= 0:
+                full_display_frame[icon_y_start:icon_y_end, icon_x_start:icon_x_end] = phone_icon
 
             cv2.imshow(WINDOW_NAME, full_display_frame)
             

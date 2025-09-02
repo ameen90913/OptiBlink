@@ -80,11 +80,15 @@ OptiBlink is an innovative assistive technology solution designed to help paraly
   - Initialize calibration and timing variables
   - Set up system state tracking (active/sleep mode)
 
-#### Emergency System (Lines 349-524)
+#### Emergency System (Lines 349-603)
 - **`make_emergency_call(self, phone_number)`** (Line 349):
   - Send WhatsApp emergency message
   - Initiate emergency phone call
   - Use multiple automation methods for reliability
+- **`make_direct_emergency_call(self, phone_number)`** (Line 543):
+  - Direct emergency phone call without WhatsApp message
+  - Faster response for urgent situations
+  - Triggered by "📞 Call" button with morse code `...-...` (SOS pattern)
 
 #### Window Management (Lines 525-554)
 - **`set_window_transparency(self, window_name, alpha=0.5)`** (Line 525): Control window opacity
@@ -261,7 +265,9 @@ The system will automatically download required NLTK data on first run.
 
 - **Auto-completion**: Type partial words and select from suggestions
 - **Voice Feedback**: Enable text-to-speech for auditory confirmation
-- **Emergency SOS**: Use SOS Morse pattern to send WhatsApp message and initiate phone call to configured emergency contact
+- **Emergency SOS**: Use SOS Morse pattern (`......`) to send WhatsApp message and initiate phone call to configured emergency contact
+- **Direct Emergency Call**: Use phone call pattern (`...-...`) to make direct emergency phone call without WhatsApp message (faster response)
+- **Phone Icon**: Clean phone icon (call_icon.png) with neutral background in bottom-right corner, displaying large visible morse code `...-...`
 - **Customization**: Adjust blink sensitivity and timing parameters
 - **Usage Tracking**: System learns from your typing patterns
 
@@ -326,6 +332,7 @@ OptiBlink/
 |----------|------|---------|
 | `EyeTracker.__init__()` | 228 | Initialize eye tracking system |
 | `make_emergency_call()` | 349 | Handle SOS emergency calls |
+| `make_direct_emergency_call()` | 543 | Direct emergency phone call |
 | `set_window_transparency()` | 525 | Control window opacity |
 | `draw_keyboard()` | 555 | Render visual interface |
 | `calculate_eye_features()` | 717 | Compute EAR and eye area |
