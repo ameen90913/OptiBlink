@@ -21,7 +21,7 @@ OptiBlink is an innovative assistive technology solution designed to help paraly
 - **Usage Analytics**: Tracks frequently used words for improved suggestions
 - **Cross-platform Support**: Works on Windows, macOS, and Linux systems
 
-## �️ Program Architecture and Structure
+## Program Architecture and Structure
 
 ### File Overview
 - **`optiblink.py`**: Main application file (1,390 lines) - Complete eye-tracking system with all functionality

@@ -16,21 +16,20 @@ DEFAULT_EMERGENCY_CONTACT = "+91 9632168509"
 # WINDOW CONFIGURATION
 WINDOW_NAME = "OptiBlink"
 
-
-
-
-# Suppress TensorFlow informational messages
+# Suppress TensorFlow informational messages EARLY
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
 
-# Third-party imports
+# Core imports that are always needed
 import cv2
-import mediapipe as mp
 import numpy as np
-import pygame
 import keyboard
-from gtts import gTTS
+
+# Defer heavy imports until needed
+mp = None  # Will be imported when EyeTracker is created
+pygame = None  # Will be imported when TTS is first used
+gTTS = None  # Will be imported when TTS is first used
 
 # Windows-specific imports
 try:
@@ -61,7 +60,10 @@ def load_config():
     """Load configuration from config.json file"""
     config_file = "config.json"
     default_config = {
-        "emergency_contact": DEFAULT_EMERGENCY_CONTACT
+        "emergency_contact": DEFAULT_EMERGENCY_CONTACT,
+        "prefer_whatsapp_web": False  # Set to True to force WhatsApp Web over app
+                                     # Useful for users without WhatsApp desktop app
+                                     # or those who prefer web interface
     }
     
     try:
@@ -70,6 +72,9 @@ def load_config():
                 config = json.load(f)
                 # ALWAYS use the centralized constant, ignore what's in the file
                 config["emergency_contact"] = DEFAULT_EMERGENCY_CONTACT
+                # Add prefer_whatsapp_web if not present
+                if "prefer_whatsapp_web" not in config:
+                    config["prefer_whatsapp_web"] = False
                 # Update the file to match the centralized constant
                 save_config(config)
                 return config
@@ -89,58 +94,39 @@ def save_config(config):
     except Exception as e:
         print(f"Error saving config: {e}")
 
-# Load words from CSV or fallback to NLTK
+# Load words from CSV or fallback to NLTK - OPTIMIZED FOR FAST STARTUP
 def load_words_from_csv(csv_path, column_name="Word"):
     words = []
     try:
+        # Quick file check first
+        if not os.path.exists(csv_path):
+            print(f"CSV file not found: {csv_path}. Will use NLTK if needed.")
+            return words
+            
+        print(f"EyeTracker: Loading words from {csv_path}...")
         with open(csv_path, newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
+            # Only load first 3000 words for faster startup
+            count = 0
             for row in reader:
+                if count >= 3000:  # Limit for faster startup
+                    break
                 word = row.get(column_name)
                 if word and word.isalpha() and len(word) > 2:
                     words.append(word.lower())
-    except FileNotFoundError:
-        print(f"CSV file not found: {csv_path}. Falling back to NLTK words.")
+                count += 1
+        print(f"EyeTracker: Loaded {len(words)} words from CSV for fast startup")
+    except Exception as e:
+        print(f"CSV loading error: {e}. Will use NLTK fallback if needed.")
     return words
 
-# Load CSV words
+# Load CSV words quickly - no NLTK loading at startup for speed
+print("EyeTracker: Fast startup - loading essential words only...")
 csv_word_list = load_words_from_csv(r"words.csv", column_name="Word")
 
-# Load NLTK words for fallback - OPTIMIZED FOR FAST STARTUP
+# Skip NLTK loading entirely at startup - defer until actually needed
 nltk_word_list = []
-print("EyeTracker: Starting word dictionary setup...")
-
-# Try to use CSV first, NLTK only if needed and fast
-try:
-    # If CSV exists and has words, skip NLTK entirely for faster startup
-    if csv_word_list and len(csv_word_list) > 1000:
-        print("EyeTracker: CSV words sufficient, skipping NLTK for faster startup")
-        nltk_word_list = []
-    else:
-        print("EyeTracker: Loading NLTK words (may take a moment on first run)...")
-        import nltk
-        
-        # Check if NLTK words are already available
-        try:
-            nltk.data.find('corpora/words')
-            from nltk.corpus import words as nltk_words
-            # Load only a subset for faster startup - full dictionary not needed for basic functionality
-            all_words = nltk_words.words()
-            nltk_word_list = [word.lower() for word in all_words[:5000] if word.isalpha() and len(word) > 2]
-            print(f"EyeTracker: NLTK words loaded (subset): {len(nltk_word_list)} words")
-        except LookupError:
-            print("EyeTracker: NLTK corpus not found. Skipping NLTK for faster startup.")
-            print("EyeTracker: (NLTK can be downloaded later if needed)")
-            nltk_word_list = []
-            
-except ImportError:
-    print("EyeTracker: NLTK not installed. Using CSV words only.")
-    nltk_word_list = []
-except Exception as e:
-    print(f"EyeTracker: NLTK loading skipped ({e}). Using CSV words only.")
-    nltk_word_list = []
-
-print("EyeTracker: Word dictionary setup complete!")
+print("EyeTracker: Word loading complete - NLTK deferred for speed!")
 
 class TrieNode:
     def __init__(self):
@@ -149,14 +135,47 @@ class TrieNode:
 
 class AutoCompleteSystem:
     def __init__(self):
+        print("AutoComplete: Building word trees...")
         self.csv_root = TrieNode()
         self.nltk_root = TrieNode()
         self.frequency = defaultdict(int)
+        self.nltk_loaded = False  # Track if NLTK has been loaded
+        
+        # Load CSV words first (fast)
         for word in csv_word_list:
             self.insert(word, root=self.csv_root)
-        for word in nltk_word_list:
-            self.insert(word, root=self.nltk_root)
+        
+        # Skip NLTK loading at startup for speed
+        print(f"AutoComplete: Loaded {len(csv_word_list)} CSV words quickly!")
+        
         self.load_usage_data()
+        print("AutoComplete: Ready!")
+    
+    def _ensure_nltk_loaded(self):
+        """Load NLTK words only when actually needed"""
+        if self.nltk_loaded or len(csv_word_list) > 1000:
+            return  # Skip if already loaded or CSV is sufficient
+        
+        try:
+            print("AutoComplete: Loading NLTK words (first time only)...")
+            import nltk
+            
+            nltk.data.find('corpora/words')
+            from nltk.corpus import words as nltk_words
+            
+            # Load subset for performance
+            all_words = nltk_words.words()
+            nltk_word_list = [word.lower() for word in all_words[:3000] if word.isalpha() and len(word) > 2]
+            
+            for word in nltk_word_list:
+                self.insert(word, root=self.nltk_root)
+            
+            self.nltk_loaded = True
+            print(f"AutoComplete: NLTK loaded - {len(nltk_word_list)} additional words available!")
+            
+        except Exception as e:
+            print(f"AutoComplete: NLTK loading failed ({e}) - using CSV words only")
+            self.nltk_loaded = True  # Prevent retrying
 
     def insert(self, word, root=None):
         if root is None:
@@ -187,8 +206,11 @@ class AutoCompleteSystem:
             self._dfs(node, prefix, results)
         results = list(set(results))
         results.sort(key=lambda x: (-self.frequency[x], x))
-        # If less than 3, supplement with NLTK
+        
+        # If less than 3 results, try to load NLTK words
         if len(results) < 3:
+            self._ensure_nltk_loaded()  # Lazy load NLTK if needed
+            
             nltk_node = self.nltk_root
             for ch in prefix:
                 if ch not in nltk_node.children:
@@ -227,35 +249,38 @@ class AutoCompleteSystem:
 
 class EyeTracker:
     def __init__(self, auto):
-        print("EyeTracker: Starting initialization...")
+        print("EyeTracker: Fast initialization starting...")
         self.auto = auto
-        print("EyeTracker: AutoComplete assigned")
         
-        print("EyeTracker: Setting up MediaPipe...")
+        # Defer MediaPipe import and initialization for faster startup
+        global mp
+        if mp is None:
+            print("EyeTracker: Importing MediaPipe...")
+            import mediapipe as mp_module
+            mp = mp_module
+        
+        print("EyeTracker: Setting up MediaPipe face mesh...")
         self.mp_face_mesh = mp.solutions.face_mesh
-        print("EyeTracker: MediaPipe face_mesh module loaded")
         
-        print("EyeTracker: Creating FaceMesh instance...")
-        try:
-            # Use optimized settings for fastest startup and reasonable performance
-            self.face_mesh = self.mp_face_mesh.FaceMesh(
-                max_num_faces=1,
-                refine_landmarks=False,  # Disable for faster startup
-                min_detection_confidence=0.5,  # Lower for faster detection
-                min_tracking_confidence=0.5    # Lower for faster tracking
-            )
-            print("EyeTracker: FaceMesh instance created successfully")
-        except Exception as e:
-            print(f"EyeTracker: Error creating FaceMesh: {e}")
-            # Fallback to absolute minimal settings
-            try:
-                self.face_mesh = self.mp_face_mesh.FaceMesh(max_num_faces=1)
-                print("EyeTracker: FaceMesh created with minimal settings")
-            except Exception as e2:
-                print(f"EyeTracker: Fallback failed: {e2} - Using basic initialization")
-                self.face_mesh = self.mp_face_mesh.FaceMesh()
-                print("EyeTracker: FaceMesh created with default settings")
+        # Create FaceMesh with fastest possible settings
+        print("EyeTracker: Creating optimized FaceMesh...")
+        self.face_mesh = self.mp_face_mesh.FaceMesh(
+            max_num_faces=1,
+            refine_landmarks=False,  # Disable for speed
+            min_detection_confidence=0.3,  # Lower threshold for speed  
+            min_tracking_confidence=0.3    # Lower threshold for speed
+        )
+        
+        # Initialize all other attributes quickly
+        print("EyeTracker: Setting up core systems...")
+        self._initialize_morse_and_detection()
+        print("EyeTracker: Initialization complete!")
 
+    def _initialize_morse_and_detection(self):
+        """Initialize morse code and eye detection systems"""
+
+    def _initialize_morse_and_detection(self):
+        """Initialize morse code and eye detection systems"""
         self.morse_to_letter = {
             # Letters
             '.-': 'A', '-...': 'B', '---.': 'C', '-..': 'D', '.': 'E',
@@ -273,56 +298,68 @@ class EyeTracker:
             '.--..': 'SELECT3', '-.-.-': 'Text to Speech', '..-..': 'Clear'
         }
 
+        # Eye landmark indices
         self.LEFT_EYE = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
         self.RIGHT_EYE = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246]
 
+        # Initialize all state variables
         self.blink_counter = 0
         self.short_blinks = 0
         self.long_blinks = 0
-
         self.blink_start_time = None
         self.open_start_time = None
         self.is_blinking = False
         
-        # Adjusted blink timing thresholds for better recognition
-        self.short_blink_threshold = 0.3  # A shorter threshold for a 'dot'
-        self.open_threshold = 1.0         # A longer pause to signal end of a character
+        # Timing thresholds
+        self.short_blink_threshold = 0.3
+        self.open_threshold = 1.0
 
+        # History tracking
         self.ear_history = deque(maxlen=5)
         self.area_history = deque(maxlen=3)
 
+        # Calibration
         self.is_calibrated = False
         self.calibration_frames = 30
         self.calibration_counter = 0
         self.ear_baseline = 0
         self.area_baseline = 0
 
+        # Message and input
         self.morse_char_buffer = ""
         self.message_history = []
         self.word_buffer = ""
         self.caps_lock = False
         
-        # For keyboard highlighting
+        # UI and highlighting
         self.last_entered_char = None
         self.highlight_timer = 0
-        self.highlight_duration = 1.0  # Show highlight for 1 second
+        self.highlight_duration = 1.0
 
-        # For SOS transparency
+        # Transparency and sleep
         self.transparency_timer = 0
-        self.transparency_duration = 10.0  # Keep transparent for 10 seconds during SOS
+        self.transparency_duration = 10.0
         self.is_transparent = False
-
-        # For sleep/wake detection (5-second eye closure)
-        self.is_system_active = True  # System starts active
+        self.is_system_active = True
         self.eyes_closed_start_time = 0
-        self.sleep_wake_threshold = 5.0  # 5 seconds of closed eyes
+        self.sleep_wake_threshold = 5.0
         self.last_system_state = True
 
-        # For SOS cooldown (temporary disable after SOS)
+        # SOS cooldown
         self.sos_cooldown_timer = 0
-        self.sos_cooldown_duration = 8.0  # Disable system for 8 seconds after SOS
+        self.sos_cooldown_duration = 8.0
         self.was_active_before_sos = True
 
+        # Phone call pause - prevent OptiBlink interference during calls
+        self.phone_call_active = False
+        self.phone_call_start_time = 0
+        self.phone_call_pause_duration = 15.0  # Pause OptiBlink for 15 seconds during calls
+        self.was_active_before_phone_call = True  # Save state before phone calls
+        
+        # Add flag to completely disable keyboard processing during calls
+        self.keyboard_processing_enabled = True
+
+        # Current state
         self.current_ear = 0
         self.current_area = 0
         self.blink_state = "Open"
@@ -331,21 +368,18 @@ class EyeTracker:
         self.blink_duration = 0
         self.open_duration = 0
 
+        # Suggestions and TTS
         self.current_suggestions = []
         self.last_word_printed = ""
-        # Flag to prevent re-sending keys when character is processed
-        self.key_sent_for_current_char = False 
-        # Track the length of the word_buffer that has already been sent to the keyboard
-        self.last_sent_len = 0 
-        self.tts_enabled = False  # TTS toggle flag
-        self.is_speaking = False  # Track if TTS is currently speaking
-        self.speaking_message = ""  # Store the message being spoken
+        self.key_sent_for_current_char = False
+        self.last_sent_len = 0
+        self.tts_enabled = False
+        self.is_speaking = False
+        self.speaking_message = ""
         
-        # Load configuration for emergency contact - ALWAYS use centralized constant
+        # Configuration
         self.config = load_config()
         self.emergency_contact = DEFAULT_EMERGENCY_CONTACT.replace(" ", "")
-        print(f"Emergency contact set to: {self.emergency_contact}")
-        print("EyeTracker: Initialization completed successfully!")
 
     def make_emergency_call(self, phone_number):
         """Initiate an emergency call and send WhatsApp message"""
@@ -360,23 +394,79 @@ class EyeTracker:
             emergency_message = "🚨 EMERGENCY ALERT! I need immediate help. This is an automated SOS message from OptiBlink. Please contact me urgently!"
             
             print("📲 Sending WhatsApp emergency message...")
-            whatsapp_msg_url = f"whatsapp://send?phone={clean_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
-            print(f"🔗 WhatsApp URL: {whatsapp_msg_url}")
-            webbrowser.open(whatsapp_msg_url)
-            time.sleep(8)  # Even longer wait for WhatsApp to fully load
+            
+            # Check if user prefers WhatsApp Web
+            prefer_web = self.config.get("prefer_whatsapp_web", False)
+            if prefer_web:
+                print("🌐 Configuration set to prefer WhatsApp Web - skipping app")
+                whatsapp_opened = False
+            else:
+                whatsapp_msg_url = f"whatsapp://send?phone={clean_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
+                print(f"🔗 WhatsApp URL: {whatsapp_msg_url}")
+                
+                # Try WhatsApp app first, then fallback to WhatsApp Web
+                try:
+                    webbrowser.open(whatsapp_msg_url)
+                    time.sleep(8)  # Wait for WhatsApp app to load
+                    whatsapp_opened = True
+                except Exception as app_error:
+                    print(f"⚠️ WhatsApp app failed: {app_error}")
+                    whatsapp_opened = False
+                
+                # Check if WhatsApp app actually opened by looking for window
+                if WIN32_AVAILABLE and whatsapp_opened:
+                    try:
+                        def find_whatsapp():
+                            def enum_callback(hwnd, windows):
+                                if win32gui.IsWindowVisible(hwnd):
+                                    title = win32gui.GetWindowText(hwnd).lower()
+                                    if 'whatsapp' in title and len(title) > 0:
+                                        windows.append((hwnd, win32gui.GetWindowText(hwnd)))
+                                return True
+                            
+                            windows = []
+                            win32gui.EnumWindows(enum_callback, windows)
+                            return windows[0] if windows else (0, "")
+                        
+                        time.sleep(3)  # Give app time to open
+                        whatsapp_hwnd, whatsapp_title = find_whatsapp()
+                        if whatsapp_hwnd == 0:
+                            print("⚠️ WhatsApp app not found, trying WhatsApp Web fallback...")
+                            whatsapp_opened = False
+                    except:
+                        whatsapp_opened = False
+            
+            # WhatsApp Web fallback if app didn't open
+            if not whatsapp_opened:
+                print("🌐 Falling back to WhatsApp Web...")
+                print("ℹ️  Note: WhatsApp Web requires:")
+                print("   • Internet connection")
+                print("   • WhatsApp account logged in on web browser")
+                print("   • May need QR code scan if not previously logged in")
+                # Format number for WhatsApp Web (remove + if present)
+                web_number = clean_number.replace('+', '')
+                whatsapp_web_url = f"https://web.whatsapp.com/send?phone={web_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
+                print(f"🔗 WhatsApp Web URL: {whatsapp_web_url}")
+                webbrowser.open(whatsapp_web_url)
+                time.sleep(10)  # Extra time for WhatsApp Web to load
+                print("✅ WhatsApp Web opened - may require QR code scan if not logged in")
             
             if PYAUTOGUI_AVAILABLE:
                 try:
                     # Focus on WhatsApp and send message immediately
                     print("🔄 Focusing on WhatsApp window...")
                     if WIN32_AVAILABLE:
-                        # Find WhatsApp window specifically
+                        # Find WhatsApp window (app or web) specifically
                         try:
-                            def find_whatsapp():
+                            def find_whatsapp_any():
                                 def enum_callback(hwnd, windows):
                                     if win32gui.IsWindowVisible(hwnd):
                                         title = win32gui.GetWindowText(hwnd).lower()
-                                        if 'whatsapp' in title and len(title) > 0:
+                                        # Check for both WhatsApp app and WhatsApp Web in browser
+                                        if ('whatsapp' in title and len(title) > 0) or \
+                                           ('whatsapp web' in title) or \
+                                           (title.startswith('whatsapp') and 'browser' in title) or \
+                                           ('web.whatsapp.com' in title):
                                             windows.append((hwnd, win32gui.GetWindowText(hwnd)))
                                     return True
                                 
@@ -384,11 +474,11 @@ class EyeTracker:
                                 win32gui.EnumWindows(enum_callback, windows)
                                 return windows[0] if windows else (0, "")
                             
-                            whatsapp_hwnd, whatsapp_title = find_whatsapp()
+                            whatsapp_hwnd, whatsapp_title = find_whatsapp_any()
                             if whatsapp_hwnd != 0:
                                 print(f"📱 Found WhatsApp: {whatsapp_title}")
                                 win32gui.SetForegroundWindow(whatsapp_hwnd)
-                                time.sleep(2)
+                                time.sleep(3)  # Extra time for web version
                                 print("✅ WhatsApp window focused!")
                             else:
                                 print("⚠️ WhatsApp window not found, using Alt+Tab")
@@ -401,10 +491,44 @@ class EyeTracker:
                     
                     # Send WhatsApp message immediately
                     print("⌨️ Sending WhatsApp message NOW...")
-                    for i in range(3):
+                    
+                    # Check if we're using WhatsApp Web or app
+                    is_web_whatsapp = False
+                    if WIN32_AVAILABLE:
+                        try:
+                            current_window = win32gui.GetForegroundWindow()
+                            current_title = win32gui.GetWindowText(current_window).lower()
+                            if 'web.whatsapp.com' in current_title or 'browser' in current_title:
+                                is_web_whatsapp = True
+                                print("🌐 Detected WhatsApp Web - using web-specific actions")
+                        except:
+                            pass
+                    
+                    if is_web_whatsapp:
+                        # WhatsApp Web: May need to wait for page load and handle send button
+                        print("🌐 WhatsApp Web: Waiting for page to fully load...")
+                        time.sleep(3)
+                        
+                        # Try Tab to navigate to send button, then Enter
+                        print("⌨️ Navigating to send button...")
+                        pyautogui.press('tab')
+                        time.sleep(0.5)
                         pyautogui.press('enter')
-                        time.sleep(0.3)
-                        print(f"⌨️ WhatsApp Enter {i+1}/3")
+                        time.sleep(0.5)
+                        
+                        # Alternative: Direct Enter attempts
+                        for i in range(5):
+                            pyautogui.press('enter')
+                            time.sleep(0.5)
+                            print(f"⌨️ WhatsApp Web Enter {i+1}/5")
+                    else:
+                        # WhatsApp App: Standard approach
+                        print("📱 WhatsApp App: Using standard send approach")
+                        for i in range(3):
+                            pyautogui.press('enter')
+                            time.sleep(0.3)
+                            print(f"⌨️ WhatsApp App Enter {i+1}/3")
+                    
                     print("✅ WhatsApp message sent!")
                     print("� Switching to WhatsApp using Alt+Tab...")
                     pyautogui.hotkey('alt', 'tab')
@@ -457,6 +581,13 @@ class EyeTracker:
                         print("⚠️ Alt+Tab fallback also failed")
             else:
                 print("📲 WhatsApp opened - pyautogui not available, manual send required")
+                if not whatsapp_opened:
+                    print("ℹ️  MANUAL ACTION REQUIRED:")
+                    print("   🌐 WhatsApp Web should be open in your browser")
+                    print("   📝 Emergency message is pre-filled")
+                    print("   ▶️  Click the SEND button to send the message")
+                    print("   📱 Or manually send this message:")
+                    print(f"       '{emergency_message}'")
             
             # Wait between WhatsApp and phone call
             print("⏳ Waiting 2 seconds before making call...")
@@ -465,6 +596,14 @@ class EyeTracker:
             # Method 2: Simple phone call using tel: protocol
             try:
                 print("📞 Making emergency phone call...")
+                
+                # PAUSE OptiBlink keyboard monitoring during phone call
+                # Save current system state to restore later
+                self.was_active_before_phone_call = self.is_system_active
+                self.phone_call_active = True
+                self.phone_call_start_time = time.time()
+                self.keyboard_processing_enabled = False  # Completely disable keyboard processing
+                print("🛑 OptiBlink keyboard monitoring COMPLETELY DISABLED for SOS call")
                 
                 # Use generic tel: protocol (works with default phone handler)
                 print(f"📱 Dialing {clean_number} using system dialer...")
@@ -508,12 +647,51 @@ class EyeTracker:
                             time.sleep(2)
                     
                     # Call immediately while Phone Link is focused
-                    print("⌨️ Starting call sequence NOW...")
-                    for i in range(5):
-                        time.sleep(0.8)
+                    print("⌨️ Starting gentle phone call sequence...")
+                    time.sleep(2)  # Initial wait for Phone Link to be ready
+                    
+                    # Use precise navigation to avoid screen casting button
+                    if WIN32_AVAILABLE and phone_hwnd != 0:
+                        print("🎯 Using precise navigation to locate call button (avoiding screen cast)...")
+                        
+                        # Ensure Phone Link is focused
+                        win32gui.SetForegroundWindow(phone_hwnd)
+                        time.sleep(1)
+                        
+                        # Simple navigation to call button (since it works on first try)
+                        print("🔍 Navigating to call button...")
+                        pyautogui.hotkey('ctrl', 'home')  # Start from beginning
+                        time.sleep(0.5)
+                        
+                        # Single tab to call button
+                        pyautogui.press('tab')
+                        time.sleep(0.3)
+                        
+                        # Activate call button with Enter key
+                        print("📞 Placing SOS call...")
                         pyautogui.press('enter')
-                        print(f"⌨️ Phone Enter {i+1}/5")
-                    print("✅ Call sequence completed!")
+                        time.sleep(1)
+                        print("✅ SOS call placed successfully!")
+                            
+                    else:
+                        # Fallback to simple pyautogui if Windows API not available
+                        print("⌨️ Fallback: Using simple pyautogui method...")
+                        for i in range(5):
+                            pyautogui.press('enter')
+                            time.sleep(1)
+                            print(f"⌨️ SOS fallback enter {i+1}/5")
+                    
+                    print("✅ SOS call sequence completed!")
+                    
+                    # Final check - ensure Phone Link window remains visible
+                    if WIN32_AVAILABLE and phone_hwnd != 0:
+                        try:
+                            print("🔍 Final SOS window visibility check...")
+                            win32gui.ShowWindow(phone_hwnd, 5)  # SW_SHOW - ensure visible
+                            win32gui.SetForegroundWindow(phone_hwnd)
+                            print("✅ Phone Link window kept visible after SOS")
+                        except Exception as final_sos_error:
+                            print(f"⚠️ Final SOS visibility check failed: {final_sos_error}")
                     
                 else:
                     print("📞 Phone dialer opened - pyautogui not available, manual call required")
@@ -527,6 +705,19 @@ class EyeTracker:
         except Exception as e:
             print(f"❌ Emergency call failed: {e}")
             print(f"🚨 MANUAL ACTION: Call {phone_number} immediately!")
+            
+            # Re-enable keyboard processing on error
+            self.phone_call_active = False
+            self.keyboard_processing_enabled = True
+            # Restore system to the state it was in before the phone call
+            if hasattr(self, 'was_active_before_phone_call'):
+                self.is_system_active = self.was_active_before_phone_call
+                state = "ACTIVE" if self.is_system_active else "SLEEP"
+                print(f"✅ System restored to {state} state after call error")
+            else:
+                # Fallback: assume user was active since they attempted a call
+                self.is_system_active = True
+                print("✅ System restored to ACTIVE state after call error")
             
             # Copy number to clipboard as last resort
             if PYPERCLIP_AVAILABLE:
@@ -551,6 +742,14 @@ class EyeTracker:
         try:
             # Direct phone call using tel: protocol
             print("📞 Making direct emergency phone call...")
+            
+            # PAUSE OptiBlink keyboard monitoring during phone call
+            # Save current system state to restore later
+            self.was_active_before_phone_call = self.is_system_active
+            self.phone_call_active = True
+            self.phone_call_start_time = time.time()
+            self.keyboard_processing_enabled = False  # Completely disable keyboard processing
+            print("🛑 OptiBlink keyboard monitoring COMPLETELY DISABLED for phone call")
             
             # Use generic tel: protocol (works with default phone handler)
             print(f"📱 Dialing {clean_number} using system dialer...")
@@ -581,23 +780,68 @@ class EyeTracker:
                         phone_hwnd, phone_title = find_phone_link()
                         if phone_hwnd != 0:
                             print(f"📱 Found Phone Link: {phone_title}")
-                            win32gui.SetForegroundWindow(phone_hwnd)
-                            time.sleep(2)
-                            print("✅ Phone Link window focused!")
                             
-                            # Press Enter multiple times to initiate the call
-                            print("⌨️ Pressing Enter to call...")
-                            for i in range(5):  # More attempts for phone calls
-                                pyautogui.press('enter')
-                                time.sleep(0.4)
-                                print(f"⌨️ Call attempt {i+1}/5")
-                            print("✅ Emergency call initiated!")
+                            # CRITICAL: Stop OptiBlink keyboard interference
+                            print("🛑 Temporarily stopping OptiBlink keyboard monitoring...")
+                            time.sleep(1)  # Brief pause for message to be seen
+                            
+                            # Focus Phone Link window properly WITHOUT aggressive window manipulation
+                            print("🎯 Focusing Phone Link gently...")
+                            win32gui.SetForegroundWindow(phone_hwnd)
+                            time.sleep(2)  # Wait for focus
+                            print("✅ Phone Link focused and ready!")
+                            
+                            # Use precise navigation to avoid screen casting button
+                            # SOLUTION: Use Tab navigation + Space key instead of direct Enter presses
+                            # OPTIMIZED: Single Tab + Space works on first try, no loops needed
+                            print("🎯 Navigating to call button (avoiding screen cast)...")
+                            
+                            # Navigate to call button - simple and effective
+                            pyautogui.hotkey('ctrl', 'home')  # Go to beginning
+                            time.sleep(0.5)
+                            
+                            # Single tab to call button (since it works on first try)
+                            print("� Navigating to call button...")
+                            pyautogui.press('tab')
+                            time.sleep(0.3)
+                            
+                            # Activate call button with Enter key (Space only dials, Enter calls)
+                            print("📞 Placing call...")
+                            pyautogui.press('enter')
+                            time.sleep(1)
+                            print("✅ Call placed successfully!")
+                            
+                            print("🔄 OptiBlink keyboard monitoring will resume automatically")
+                            
+                            print("✅ Emergency call attempts completed!")
+                            
+                            # Final check - ensure Phone Link window remains visible
+                            try:
+                                print("🔍 Final window visibility check...")
+                                win32gui.ShowWindow(phone_hwnd, 5)  # SW_SHOW - ensure visible
+                                win32gui.SetForegroundWindow(phone_hwnd)
+                                print("✅ Phone Link window kept visible")
+                            except Exception as final_check_error:
+                                print(f"⚠️ Final visibility check failed: {final_check_error}")
+                            
                             return True
                         else:
                             print("⚠️ Phone Link not found, call may need manual confirmation")
                     except Exception as call_error:
                         print(f"⚠️ Direct call automation failed: {call_error}")
                         print("📞 Phone dialer opened - manual call confirmation may be required")
+                        # Re-enable keyboard processing on error
+                        self.phone_call_active = False
+                        self.keyboard_processing_enabled = True
+                        # Restore system to the state it was in before the phone call
+                        if hasattr(self, 'was_active_before_phone_call'):
+                            self.is_system_active = self.was_active_before_phone_call
+                            state = "ACTIVE" if self.is_system_active else "SLEEP"
+                            print(f"✅ System restored to {state} state after call error")
+                        else:
+                            # Fallback: assume user was active since they attempted a call
+                            self.is_system_active = True
+                            print("✅ System restored to ACTIVE state after call error")
             else:
                 print("📞 Phone dialer opened - pyautogui not available, manual confirmation required")
             
@@ -605,6 +849,18 @@ class EyeTracker:
             
         except Exception as e:
             print(f"❌ Emergency call failed: {e}")
+            # Re-enable keyboard processing on error
+            self.phone_call_active = False
+            self.keyboard_processing_enabled = True
+            # Restore system to the state it was in before the phone call
+            if hasattr(self, 'was_active_before_phone_call'):
+                self.is_system_active = self.was_active_before_phone_call
+                state = "ACTIVE" if self.is_system_active else "SLEEP"
+                print(f"✅ System restored to {state} state after call error")
+            else:
+                # Fallback: assume user was active since they attempted a call
+                self.is_system_active = True
+                print("✅ System restored to ACTIVE state after call error")
             
             # Copy number to clipboard as fallback
             if PYPERCLIP_AVAILABLE:
@@ -981,6 +1237,18 @@ class EyeTracker:
         try:
             self.is_speaking = True
             self.speaking_message = text
+            
+            # Import heavy libraries only when actually needed for TTS
+            global pygame, gTTS
+            if pygame is None:
+                print("TTS: Loading pygame...")
+                import pygame as pygame_module
+                pygame = pygame_module
+            if gTTS is None:
+                print("TTS: Loading gTTS...")
+                from gtts import gTTS as gTTS_module
+                gTTS = gTTS_module
+            
             # Create a temporary file for the audio
             with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as temp_file:
                 temp_filename = temp_file.name
@@ -1012,6 +1280,11 @@ class EyeTracker:
             self.speaking_message = ""
 
     def process_special_character(self, char):
+        # Check if keyboard processing is disabled (during phone calls)
+        if not self.keyboard_processing_enabled:
+            print("Keyboard processing disabled - skipping operation")
+            return
+            
         # Skip all keyboard writing during SOS cooldown period to prevent interference
         if (self.sos_cooldown_timer > 0 and 
             time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
@@ -1070,8 +1343,18 @@ class EyeTracker:
             self.message_history.append("SOS - Emergency call initiated")
             # Don't write to keyboard during emergency - it interferes with phone app
             
-            if self.tts_enabled:
-                self.speak(f"S O S emergency activated. Calling {self.emergency_contact}")
+            # Always speak SOS message regardless of TTS setting - this is an emergency
+            self.speak(f"S O S emergency activated. Calling {self.emergency_contact}")
+            
+            # Start SOS cooldown for full SOS - temporarily disable system
+            self.was_active_before_sos = self.is_system_active
+            self.is_system_active = False
+            self.sos_cooldown_timer = time.time()
+            print("System temporarily disabled to prevent accidental input during SOS")
+            
+            self.word_buffer = ""
+            self.morse_char_buffer = ""
+            self.last_sent_len = 0
         elif char == 'Phone Call':
             # Direct emergency phone call (skip WhatsApp message)
             print("\n*** EMERGENCY PHONE CALL ***")
@@ -1087,17 +1370,12 @@ class EyeTracker:
             
             self.message_history.append("Emergency phone call initiated")
             
+            # Only speak if TTS is enabled - simple emergency call message
             if self.tts_enabled:
                 self.speak(f"Emergency call to {self.emergency_contact}")
-            else:
-                # Even if TTS is off, speak emergency message
-                self.speak(f"S O S emergency activated. Calling {self.emergency_contact}")
             
-            # Start SOS cooldown - temporarily disable system
-            self.was_active_before_sos = self.is_system_active
-            self.is_system_active = False
-            self.sos_cooldown_timer = time.time()
-            print("System temporarily disabled to prevent accidental input")
+            # NO SOS cooldown for direct phone call - this is just a quick call
+            # Keep system active so user can continue using it after call
             
             self.word_buffer = ""
             self.morse_char_buffer = ""
@@ -1122,8 +1400,30 @@ class EyeTracker:
             if self.tts_enabled:
                 self.speak("Buffer cleared")
 
+    def check_phone_call_status(self):
+        """Check if phone call pause period has ended and re-enable keyboard processing"""
+        if self.phone_call_active and (time.time() - self.phone_call_start_time > self.phone_call_pause_duration):
+            self.phone_call_active = False
+            self.keyboard_processing_enabled = True
+            
+            # Restore system to the state it was in before the phone call
+            if hasattr(self, 'was_active_before_phone_call'):
+                self.is_system_active = self.was_active_before_phone_call
+                state = "ACTIVE" if self.is_system_active else "SLEEP"
+                print(f"✅ System restored to {state} state after phone call")
+            else:
+                # Fallback: assume user was active since they made a call
+                self.is_system_active = True
+                print("✅ System restored to ACTIVE state after phone call")
+            print("✅ Phone call period ended - OptiBlink keyboard processing re-enabled")
+
     def is_system_truly_active(self):
-        """Check if system is active considering both sleep mode and SOS cooldown"""
+        """Check if system is active considering both sleep mode, SOS cooldown, and phone calls"""
+        # If keyboard processing is disabled (phone call), system is temporarily inactive for morse code
+        # but sleep/wake detection should still work
+        if not self.keyboard_processing_enabled:
+            return False
+            
         # If in SOS cooldown, system is temporarily inactive
         if (self.sos_cooldown_timer > 0 and 
             time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
@@ -1228,6 +1528,19 @@ class EyeTracker:
         print("Calibration reset. Please look straight at the camera for recalibration.")
 
     def process_frame(self, frame):
+        # Check if phone call is active and pause OptiBlink processing
+        if (self.phone_call_active and 
+            time.time() - self.phone_call_start_time < self.phone_call_pause_duration):
+            # During phone call - minimal processing, no keyboard capture
+            cv2.putText(frame, "PHONE CALL ACTIVE - OptiBlink Paused", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            cv2.putText(frame, f"Resuming in {int(self.phone_call_pause_duration - (time.time() - self.phone_call_start_time))}s", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+            return frame
+        elif self.phone_call_active:
+            # Phone call timeout reached - resume normal operation using the proper restoration function
+            self.check_phone_call_status()  # This will handle all restoration properly
+        
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_height, frame_width = frame.shape[:2]
         results = self.face_mesh.process(rgb_frame)
@@ -1267,12 +1580,14 @@ class EyeTracker:
                     self.open_duration = 0
                     
                     # Check for sleep/wake toggle (5 seconds of closed eyes)
+                    # NOTE: This works regardless of current system state - allows waking up from sleep
                     if (self.eyes_closed_start_time > 0 and 
                         current_time - self.eyes_closed_start_time >= self.sleep_wake_threshold):
                         # Toggle system state
                         self.is_system_active = not self.is_system_active
                         status = "ACTIVE" if self.is_system_active else "SLEEP"
                         print(f"\n*** SYSTEM {status} ***")
+                        print(f"Sleep/Wake toggle activated after {self.sleep_wake_threshold} seconds")
                         
                         if self.tts_enabled:
                             self.speak(f"System {status.lower()}")
@@ -1328,6 +1643,18 @@ class EyeTracker:
         cv2.putText(frame, f"SYSTEM: {system_status} - CAPS: {'ON' if self.caps_lock else 'OFF'} - TTS: {'ON' if self.tts_enabled else 'OFF'} - Word: {self.word_buffer}",
                     (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 2)
         current_y += int(line_spacing * 0.7)
+
+        # Show sleep/wake progress if eyes are closed for more than 50% of threshold
+        if self.eyes_closed_start_time > 0:
+            elapsed = time.time() - self.eyes_closed_start_time
+            # Only show progress after 50% of the required time to avoid showing on every blink
+            # This prevents the indicator from appearing during normal blinking
+            if elapsed > self.sleep_wake_threshold * 0.5:  # Show after 2.5 seconds (50% of 5 seconds)
+                progress = min(elapsed / self.sleep_wake_threshold, 1.0) * 100
+                action = "WAKE UP" if not self.is_system_active else "SLEEP"
+                cv2.putText(frame, f"Hold to {action}: {progress:.1f}% ({self.sleep_wake_threshold - elapsed:.1f}s left)",
+                            (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 2)
+                current_y += int(line_spacing * 0.7)
 
         # Show speaking indicator if TTS is active
         if self.is_speaking:
@@ -1401,22 +1728,27 @@ class EyeTracker:
         return frame
 
 def main():
-    print("Starting OptiBlink Eye Tracker...")
-    cap = cv2.VideoCapture(0)
-    print("Camera initialized")
-    
-    if not cap.isOpened():
-        print("Error: Could not open camera")
-        return
-        
-    auto = AutoCompleteSystem()
-    print("AutoComplete system loaded")
-    
-    eye_tracker = EyeTracker(auto)
-    print("EyeTracker initialized")
 
-    window_width = 800  # Made bigger for better visibility
-    window_height = 550  # Made bigger for better visibility
+    # Initialize camera first for immediate feedback
+    print("📹 Initializing camera...")
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("❌ Error: Could not open camera")
+        return
+    print("✅ Camera ready!")
+    
+    # Initialize systems with progress feedback
+    print("🧠 Loading AutoComplete system...")
+    auto = AutoCompleteSystem()
+    print("✅ AutoComplete ready!")
+    
+    print("👁️ Initializing EyeTracker...")  
+    eye_tracker = EyeTracker(auto)
+    print("✅ EyeTracker ready!")
+    
+    print("🖥️ Setting up window...")
+    window_width = 800
+    window_height = 550
 
     # Move window to top-right corner with some margin
     try:
@@ -1518,6 +1850,9 @@ def main():
                 eye_tracker.sos_cooldown_timer = 0
                 status = "ACTIVE" if eye_tracker.is_system_active else "SLEEP"
                 print(f"SOS cooldown expired - System restored to {status}")
+            
+            # Check if phone call pause has expired and restore keyboard processing
+            eye_tracker.check_phone_call_status()
 
             full_display_frame = np.zeros((window_height, window_width, 3), dtype=np.uint8)
             full_display_frame[0:video_height, 0:window_width] = processed_video_frame
