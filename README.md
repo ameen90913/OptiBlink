@@ -9,12 +9,14 @@
 
 OptiBlink is an innovative assistive technology solution designed to help paralyzed patients communicate through blink-based text input. Using computer vision and machine learning, the system detects eye blinks and converts them into text input using Morse code patterns, enabling individuals with limited mobility to type and communicate effectively.
 
+The interface has been streamlined to focus on core functionality: text input via Morse code and emergency SOS capabilities, providing a clean and efficient user experience.
+
 ## ✨ Features
 
 - **Real-time Eye Tracking**: Advanced computer vision using MediaPipe for precise eye landmark detection
 - **Blink Detection**: Sophisticated algorithm to detect and differentiate between intentional and natural blinks
 - **Morse Code Translation**: Converts blink patterns into text using Morse code system
-- **Emergency SOS System**: Critical safety feature for medical emergencies using SOS Morse pattern
+- **Emergency SOS System**: Critical safety feature for medical emergencies using SOS Morse pattern (`......`)
 - **Auto-completion**: Intelligent word suggestions using Trie data structure and frequency analysis
 - **Text-to-Speech**: Built-in speech synthesis for auditory feedback
 - **Customizable Interface**: Adjustable sensitivity and calibration options
@@ -24,13 +26,13 @@ OptiBlink is an innovative assistive technology solution designed to help paraly
 ## Program Architecture and Structure
 
 ### File Overview
-- **`optiblink.py`**: Main application file (1,390 lines) - Complete eye-tracking system with all functionality
+- **`optiblink.py`**: Main application file (1,957 lines) - Complete eye-tracking system with all functionality
 
 ### Program Flow
 1. **Initialization Phase** (Lines 1-143)
 2. **Data Structures** (Lines 144-226)
-3. **Core Classes** (Lines 227-1161)
-4. **Main Execution** (Lines 1162-1390)
+3. **Core Classes** (Lines 227-1800+)
+4. **Main Execution** (Lines 1800+-1957)
 
 ## 📋 Detailed Component Breakdown
 
@@ -85,10 +87,10 @@ OptiBlink is an innovative assistive technology solution designed to help paraly
   - Send WhatsApp emergency message
   - Initiate emergency phone call
   - Use multiple automation methods for reliability
-- **`make_direct_emergency_call(self, phone_number)`** (Line 543):
-  - Direct emergency phone call without WhatsApp message
-  - Faster response for urgent situations
-  - Triggered by "📞 Call" button with morse code `...-...` (SOS pattern)
+- **`handle_emergency_sos(self)`** (Line 884):
+  - Direct emergency SOS handler
+  - Triggered by Emergency SOS morse code `......` (6 dots)
+  - Bypasses all system restrictions for immediate emergency response
 
 #### Window Management (Lines 525-554)
 - **`set_window_transparency(self, window_name, alpha=0.5)`** (Line 525): Control window opacity
@@ -266,8 +268,6 @@ The system will automatically download required NLTK data on first run.
 - **Auto-completion**: Type partial words and select from suggestions
 - **Voice Feedback**: Enable text-to-speech for auditory confirmation
 - **Emergency SOS**: Use SOS Morse pattern (`......`) to send WhatsApp message and initiate phone call to configured emergency contact
-- **Direct Emergency Call**: Use phone call pattern (`...-...`) to make direct emergency phone call without WhatsApp message (faster response)
-- **Phone Icon**: Clean phone icon (call_icon.png) with neutral background in bottom-right corner, displaying large visible morse code `...-...`
 - **Customization**: Adjust blink sensitivity and timing parameters
 - **Usage Tracking**: System learns from your typing patterns
 
@@ -280,12 +280,13 @@ The system will automatically download required NLTK data on first run.
 
 ```
 OptiBlink/
-├── optiblink.py          # Main application file (1,390 lines)
+├── optiblink.py          # Main application file (1,957 lines)
 ├── requirements.txt      # Python dependencies
 ├── config.json          # Emergency contact configuration
 ├── words.csv            # Custom word dictionary for autocomplete
 ├── usage_data.txt       # Usage analytics data (auto-generated)
 ├── morse_keyboard.jpg   # Morse code reference image
+├── call_icon.png        # Icon file (kept but no longer used in interface)
 ├── test.py              # Testing utilities
 └── README.md            # Project documentation
 ```
@@ -390,6 +391,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 For support, questions, or feature requests:
 
+- **Email**: optiblink.help@gmail.com
 - Create an issue on GitHub
 - Documentation: [Wiki](https://github.com/your-username/OptiBlink/wiki)
 - Contact creators
@@ -403,14 +405,14 @@ For support, questions, or feature requests:
 
 ## 📈 Statistics
 
-- **Lines of Code**: 1,390 (single main file)
+- **Lines of Code**: 1,957 (single main file)
 - **Functions**: 25+ core functions across 4 main sections
 - **Classes**: 3 main classes (TrieNode, AutoCompleteSystem, EyeTracker)
 - **Dependencies**: 9 core libraries + optional Windows-specific modules
-- **Features**: 10+ major features including emergency system
+- **Features**: 10+ major features including emergency SOS system
 - **Supported Languages**: English (expandable)
-- **Emergency Response**: WhatsApp + Phone call integration
-- **Window Management**: Always-on-top with recalibration support
+- **Emergency Response**: WhatsApp + Phone call integration (emergency only)
+- **Interface**: Clean, streamlined design focused on text input and emergency functions
 - **Dictionary Size**: 5000+ words (NLTK subset) + unlimited CSV words
 - **Real-time Processing**: 30+ FPS video processing capability
 

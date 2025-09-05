@@ -7,3 +7,4 @@ pywin32
 gtts
 pygame
 pyperclip
+pyautogui
