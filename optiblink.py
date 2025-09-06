@@ -300,7 +300,7 @@ class EyeTracker:
             # Special characters
             '.-.-': 'Enter', '.--.-': 'CapsLk', '--': 'Backspace', '......': 'Emergency SOS',
             '..--': 'Space', '.---.': 'SELECT1', '..--.': 'SELECT2',
-            '.--..': 'SELECT3', '-.-.-': 'Text to Speech', '..-..': 'Clear'
+            '.--..': 'SELECT3', '-.-.-': 'TTS', '..-..': 'Clear'
         }
 
         # Eye landmark indices
@@ -1163,50 +1163,55 @@ class EyeTracker:
         keyboard_img = np.zeros((height, width, 3), dtype=np.uint8)
         keyboard_img[:] = (40, 40, 40)  # Dark gray background
         
-        # Key dimensions for better fit
+        # Key dimensions for better fit with proper text accommodation
         # Calculate available space more accurately
-        available_width = width - 20  # Leave 10px margin on each side
+        available_width = width - 40  # Leave more margin (20px each side)
         
-        # Row 0 has the most keys (11), so base calculation on that
-        # Account for: TTS(1.4x) + 10 numbers(1x) + margins between keys
-        total_key_units = 1.4 + 10.0  # Text to Speech + 10 number keys
-        key_spacing = 2  # Space between keys
-        total_spacing = key_spacing * 10  # 10 gaps between 11 keys
+        # More realistic calculation accounting for actual key widths needed
+        # Estimate total width needed: TTS (smaller now) + Emergency SOS (large) + other keys
+        estimated_total_units = 1.8 + 9.0  # Reduced estimate since TTS is now much shorter
+        key_spacing = 3  # Slightly more space between keys
+        total_spacing = key_spacing * 10  # 10 gaps between 11 keys in longest row
         
-        base_key_width = int((available_width - total_spacing) / total_key_units)
-        key_height = (height - 25) // 4 - 3   # Optimized row spacing
-        margin_x = 10  # Left margin
-        margin_y = 4   # Reduced top margin
-        key_gap = 2    # Gap between keys
+        base_key_width = int((available_width - total_spacing) / estimated_total_units)
+        # Ensure minimum key width for readability
+        base_key_width = max(base_key_width, 40)  # Reduced minimum since TTS is smaller
+        
+        key_height = (height - 30) // 4 - 4   # More space for text
+        margin_x = 20  # Increased left margin
+        margin_y = 5   # Slightly more top margin
+        key_gap = 3    # Increased gap between keys
         
         # Debug info (will print once)
         if not hasattr(self, 'keyboard_debug_printed'):
             print(f"Keyboard: width={width}, available={available_width}, base_key={base_key_width}")
             self.keyboard_debug_printed = True
         
-        # Colors - different for active/sleep/SOS cooldown states
+        # Enhanced colors for better visibility and accessibility
         if (self.sos_cooldown_timer > 0 and 
             time.time() - self.sos_cooldown_timer < self.sos_cooldown_duration):
-            # SOS cooldown state - yellowish tint
-            normal_color = (60, 80, 80)      # Yellowish gray key (cooldown)
-            highlight_color = (100, 255, 255) # Yellow highlight (cooldown)
-            text_color = (200, 255, 255)     # Yellowish text (cooldown)
-            highlight_text_color = (0, 50, 50) # Dark text on highlighted key
+            # SOS cooldown state - high contrast yellow/orange theme
+            normal_color = (40, 60, 100)     # Dark blue-gray key (cooldown)
+            highlight_color = (0, 165, 255)  # Bright orange highlight (cooldown)
+            text_color = (255, 255, 255)     # Pure white text (cooldown)
+            highlight_text_color = (0, 0, 0) # Black text on highlighted key
         elif self.is_system_active:
-            normal_color = (80, 80, 80)      # Gray key (active)
-            highlight_color = (0, 255, 0)    # Green highlight (active)
-            text_color = (255, 255, 255)     # White text (active)
+            # Active state - high contrast blue/green theme
+            normal_color = (60, 60, 60)      # Medium gray key (active)
+            highlight_color = (0, 255, 128)  # Bright green highlight (active)
+            text_color = (255, 255, 255)     # Pure white text (active)
             highlight_text_color = (0, 0, 0) # Black text on highlighted key
         else:
-            normal_color = (40, 40, 40)      # Darker gray key (sleep)
-            highlight_color = (60, 60, 60)   # Dark gray highlight (sleep)
-            text_color = (100, 100, 100)     # Dimmed text (sleep)
-            highlight_text_color = (150, 150, 150) # Dimmed highlight text
+            # Sleep state - high contrast but dimmed
+            normal_color = (30, 30, 30)      # Very dark gray key (sleep)
+            highlight_color = (80, 80, 80)   # Medium gray highlight (sleep)
+            text_color = (180, 180, 180)     # Light gray text (sleep) - improved from dim
+            highlight_text_color = (255, 255, 255) # White highlight text for contrast
         
         # Define each row separately - matching morse_keyboard.jpg reference
         rows = [
-            # Row 0: Text to Speech and Numbers
-            [('-.-.-', 'Text to Speech'), ('.----', '1'), ('..---', '2'), ('...--', '3'), ('....-', '4'), 
+            # Row 0: TTS and Numbers
+            [('-.-.-', 'TTS'), ('.----', '1'), ('..---', '2'), ('...--', '3'), ('....-', '4'), 
              ('.....', '5'), ('-....', '6'), ('--...', '7'), ('---..', '8'), ('----.', '9'), ('-----', '0')],
             
             # Row 1: QWERTYUIOP + Backspace
@@ -1226,31 +1231,50 @@ class EyeTracker:
             current_x = margin_x
             
             for col_idx, (morse_code, display_text) in enumerate(row_keys):
-                # More conservative key widths to ensure everything fits
-                if display_text in ['Text to Speech', 'Emergency SOS']:
-                    key_width = int(base_key_width * 1.4)  # Reduced to 1.4x
-                elif display_text == 'Backspace':
-                    key_width = int(base_key_width * 1.1)  # Reduced to 1.1x
-                elif display_text == 'Space':
-                    key_width = int(base_key_width * 1.6)  # Reduced to 1.6x
-                elif display_text == 'CapsLk':
-                    key_width = int(base_key_width * 1.1)  # Slightly wider
-                elif display_text == 'Enter':
-                    key_width = int(base_key_width * 1.1)  # Slightly wider
-                elif display_text == 'Clear':
-                    key_width = int(base_key_width * 1.0)  # Standard width
+                # Calculate key width based on content and ensure text fits
+                # Base calculation for text width to ensure proper fit
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                if len(display_text) > 8:
+                    test_font_scale = 0.4
+                elif len(display_text) > 4:
+                    test_font_scale = 0.45
                 else:
-                    key_width = base_key_width
+                    test_font_scale = 0.55
+                
+                # Get actual text dimensions for proper sizing
+                (text_width, text_height), _ = cv2.getTextSize(display_text, font, test_font_scale, 2)
+                min_key_width = text_width + 16  # Add 16px padding (8px each side)
+                
+                # Set key widths with proper text accommodation
+                if display_text == 'TTS':
+                    key_width = max(int(base_key_width * 1.1), min_key_width)  # Smaller multiplier for TTS
+                elif display_text == 'Emergency SOS':
+                    key_width = max(int(base_key_width * 1.8), min_key_width)  # Large multiplier for Emergency SOS
+                elif display_text == 'Backspace':
+                    key_width = max(int(base_key_width * 1.3), min_key_width)  # Increased for "Backspace"
+                elif display_text == 'Space':
+                    key_width = max(int(base_key_width * 1.4), min_key_width)  # Space key
+                elif display_text == 'CapsLk':
+                    key_width = max(int(base_key_width * 1.2), min_key_width)  # CapsLock
+                elif display_text == 'Enter':
+                    key_width = max(int(base_key_width * 1.2), min_key_width)  # Enter key
+                elif display_text == 'Clear':
+                    key_width = max(int(base_key_width * 1.1), min_key_width)  # Clear key
+                else:
+                    key_width = max(base_key_width, min_key_width)  # Single letters/numbers
                 
                 # Calculate key position
                 key_y = margin_y + row_idx * (key_height + margin_y)
                 
-                # Ensure we don't exceed the window bounds
-                if current_x + key_width > width - margin_x:
-                    # If we're running out of space, compress this key
-                    key_width = width - current_x - margin_x
-                    if key_width < base_key_width * 0.6:  # Don't make it too small
-                        key_width = int(base_key_width * 0.6)
+                # Advanced bounds checking to prevent text overflow
+                available_width_remaining = width - current_x - margin_x
+                if key_width > available_width_remaining:
+                    # Scale down this key but maintain minimum readability
+                    key_width = max(available_width_remaining, 35)  # Minimum 35px width
+                    # If still too small, reduce font sizes for this key
+                    if key_width < min_key_width:
+                        # This key will need smaller font - handled in text drawing section
+                        key_width = available_width_remaining
                 
                 # Check if this key should be highlighted
                 is_highlighted = (self.last_entered_char and 
@@ -1265,34 +1289,107 @@ class EyeTracker:
                 key_color = highlight_color if is_highlighted else normal_color
                 cv2.rectangle(keyboard_img, (current_x, key_y), (current_x + key_width, key_y + key_height), key_color, -1)
                 
-                # Draw key border (reduced thickness)
-                border_color = (200, 200, 200) if is_highlighted else (120, 120, 120)
-                cv2.rectangle(keyboard_img, (current_x, key_y), (current_x + key_width, key_y + key_height), border_color, 1)
-                
-                # Draw key text with appropriate sizing
-                font = cv2.FONT_HERSHEY_SIMPLEX
-                if len(display_text) > 8:
-                    font_scale = 0.35  # Very small for long text
-                elif len(display_text) > 4:
-                    font_scale = 0.4   # Small for medium text
+                # Enhanced key border for better visibility
+                border_thickness = 2  # Thicker border for better contrast
+                if is_highlighted:
+                    border_color = (255, 255, 255)  # White border for highlighted keys
                 else:
-                    font_scale = 0.5   # Normal for short text
-                    
+                    border_color = (180, 180, 180)  # Brighter gray for better visibility
+                cv2.rectangle(keyboard_img, (current_x, key_y), (current_x + key_width, key_y + key_height), border_color, border_thickness)
+                
+                # Draw key text with improved contrast and sizing for better visibility
+                font = cv2.FONT_HERSHEY_SIMPLEX
+                
+                # Dynamic text thickness - thinner for longer text to improve readability
+                if len(display_text) > 8:  # Very long text like "Emergency SOS"
+                    text_thickness = 1  # Thin for better readability
+                elif len(display_text) > 4:  # Medium text like "Backspace"
+                    text_thickness = 1  # Thin for better readability  
+                else:  # Short text like single letters
+                    text_thickness = 2  # Thick for visibility
+                
+                # Dynamic font scaling to ensure text fits within key boundaries
+                max_attempts = 5
+                font_scale = 0.55 if len(display_text) <= 4 else (0.45 if len(display_text) <= 8 else 0.4)
+                
+                # Ensure text fits within key width with padding
+                for attempt in range(max_attempts):
+                    (text_w, text_h), _ = cv2.getTextSize(display_text, font, font_scale, text_thickness)
+                    if text_w <= key_width - 8:  # 4px padding on each side
+                        break
+                    font_scale *= 0.9  # Reduce font size by 10%
+                    if font_scale < 0.25:  # Minimum readable size
+                        font_scale = 0.25
+                        break
+                
                 text_col = highlight_text_color if is_highlighted else text_color
                 
-                # Center text in key
-                (text_w, text_h), _ = cv2.getTextSize(display_text, font, font_scale, 1)
-                text_x = current_x + (key_width - text_w) // 2
-                text_y = key_y + (key_height + text_h) // 2 - 4
-                cv2.putText(keyboard_img, display_text, (text_x, text_y), font, font_scale, text_col, 1)
+                # Center text within key boundaries with bounds checking
+                text_x = max(current_x + 4, current_x + (key_width - text_w) // 2)  # Ensure 4px left margin
+                text_x = min(text_x, current_x + key_width - text_w - 4)  # Ensure 4px right margin
+                text_y = key_y + (key_height + text_h) // 2 - 10  # Adjusted for morse text below
                 
-                # Draw morse code below (smaller font) - show for all keys that have morse codes
+                # Enhanced contrast outline system for better visibility
+                if not is_highlighted and text_col == (255, 255, 255):  # White text gets black outline
+                    outline_color = (0, 0, 0)
+                    outline_thickness = 1  # Always use thickness 1 for outlines regardless of text thickness
+                    
+                    # Enhanced outline for longer text that needs better visibility
+                    if len(display_text) > 4:  # For longer text like "Backspace", "Emergency SOS"
+                        # Draw a more comprehensive outline for better readability
+                        offsets = [(-1,-1), (-1,0), (-1,1), (0,-1), (0,1), (1,-1), (1,0), (1,1)]
+                        for dx, dy in offsets:
+                            cv2.putText(keyboard_img, display_text, (text_x + dx, text_y + dy), 
+                                       font, font_scale, outline_color, outline_thickness)
+                    else:
+                        # Standard 4-direction outline for shorter text
+                        cv2.putText(keyboard_img, display_text, (text_x - 1, text_y), font, font_scale, outline_color, outline_thickness)
+                        cv2.putText(keyboard_img, display_text, (text_x + 1, text_y), font, font_scale, outline_color, outline_thickness)
+                        cv2.putText(keyboard_img, display_text, (text_x, text_y - 1), font, font_scale, outline_color, outline_thickness)
+                        cv2.putText(keyboard_img, display_text, (text_x, text_y + 1), font, font_scale, outline_color, outline_thickness)
+                
+                # Draw main text
+                cv2.putText(keyboard_img, display_text, (text_x, text_y), font, font_scale, text_col, text_thickness)
+                
+                # Draw morse code below with improved visibility and proper bounds checking
                 if morse_code and morse_code != display_text and len(morse_code) <= 6:
-                    morse_font_scale = 0.25 if len(display_text) > 6 else 0.3  # Smaller font for long key names
-                    (morse_w, morse_h), _ = cv2.getTextSize(morse_code, font, morse_font_scale, 1)
-                    morse_x = current_x + (key_width - morse_w) // 2
-                    morse_y = key_y + key_height - 3  # Slightly higher for better visibility
-                    cv2.putText(keyboard_img, morse_code, (morse_x, morse_y), font, morse_font_scale, text_col, 1)
+                    # Dynamic font scaling and thickness for morse code
+                    morse_font_scale = 0.35 if len(display_text) > 6 else 0.45
+                    # Thinner morse code for better readability, especially on busy keys
+                    morse_thickness = 1  # Always use thickness 1 for Morse code for clarity
+                    
+                    # Ensure morse code fits within key width
+                    for attempt in range(3):
+                        (morse_w, morse_h), _ = cv2.getTextSize(morse_code, font, morse_font_scale, morse_thickness)
+                        if morse_w <= key_width - 6:  # 3px padding on each side
+                            break
+                        morse_font_scale *= 0.85  # Reduce size
+                        if morse_font_scale < 0.25:
+                            morse_font_scale = 0.25
+                            break
+                    
+                    # High contrast colors for morse code
+                    if is_highlighted:
+                        morse_color = (255, 255, 0)  # Bright yellow
+                    else:
+                        morse_color = (255, 255, 255)  # White
+                        outline_color = (0, 0, 0)  # Black outline
+                    
+                    # Center morse code within key boundaries with bounds checking
+                    morse_x = max(current_x + 3, current_x + (key_width - morse_w) // 2)  # 3px left margin
+                    morse_x = min(morse_x, current_x + key_width - morse_w - 3)  # 3px right margin
+                    morse_y = key_y + key_height - 6  # Space from bottom
+                    
+                    # Draw black outline for better contrast (only for non-highlighted keys)
+                    if not is_highlighted:
+                        # 4-direction outline for morse code (cleaner than 8-direction)
+                        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            cv2.putText(keyboard_img, morse_code, (morse_x + dx, morse_y + dy), 
+                                       font, morse_font_scale, outline_color, 1)  # Always use thickness 1 for outlines
+                    
+                    # Draw main morse code text
+                    cv2.putText(keyboard_img, morse_code, (morse_x, morse_y), 
+                               font, morse_font_scale, morse_color, morse_thickness)
                 
                 # Move to next key position with consistent gap
                 current_x += key_width + key_gap
@@ -1461,7 +1558,7 @@ class EyeTracker:
         elif char == 'CapsLk':
             self.caps_lock = not self.caps_lock
             self.morse_char_buffer = ""
-        elif char == 'Text to Speech':
+        elif char == 'TTS':
             self.tts_enabled = not self.tts_enabled
             status = "ON" if self.tts_enabled else "OFF"
             print(f"TTS {status}")
@@ -1522,7 +1619,7 @@ class EyeTracker:
 
         if self.morse_char_buffer in self.morse_to_letter:
             char = self.morse_to_letter[self.morse_char_buffer]
-            if char == 'Text to Speech':
+            if char == 'TTS':
                 self.process_special_character(char)
                 self.key_sent_for_current_char = True
                 self.morse_char_buffer = ""
@@ -1748,20 +1845,22 @@ class EyeTracker:
                     (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
         current_y += int(line_spacing * 0.7)
 
-        possible_letters = [char for code, char in self.morse_to_letter.items() if code.startswith(self.morse_char_buffer)]
-        if possible_letters:
-            # Split possible letters into two lines if too long
-            possible_text = [f"Possible: {', '.join(possible_letters)}"]
-            max_line_length = 40  # max chars per line (adjust as needed)
-            if len(possible_text[0]) > max_line_length:
-                # Split into two lines
-                mid = len(possible_letters) // 2
-                line1 = f"Possible: {', '.join(possible_letters[:mid])}"
-                line2 = f"{', '.join(possible_letters[mid:])}"
-                possible_text = [line1, line2]
-            for line in possible_text:
-                cv2.putText(frame, line, (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-                current_y += int(line_spacing * 0.7)
+        # Only show possible letters if there's something in the morse buffer
+        if self.morse_char_buffer:
+            possible_letters = [char for code, char in self.morse_to_letter.items() if code.startswith(self.morse_char_buffer)]
+            if possible_letters:
+                # Split possible letters into two lines if too long
+                possible_text = [f"Possible: {', '.join(possible_letters)}"]
+                max_line_length = 40  # max chars per line (adjust as needed)
+                if len(possible_text[0]) > max_line_length:
+                    # Split into two lines
+                    mid = len(possible_letters) // 2
+                    line1 = f"Possible: {', '.join(possible_letters[:mid])}"
+                    line2 = f"{', '.join(possible_letters[mid:])}"
+                    possible_text = [line1, line2]
+                for line in possible_text:
+                    cv2.putText(frame, line, (10, current_y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                    current_y += int(line_spacing * 0.7)
 
         # Suggestions logic
         if self.word_buffer:
