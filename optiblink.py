@@ -1,4 +1,6 @@
 # Standard library imports
+import sys
+sys.stdout.reconfigure(encoding='utf-8')
 import csv
 import ctypes
 import json
@@ -11,13 +13,51 @@ import traceback
 import webbrowser
 from collections import deque, defaultdict
 
+import io
+import sounddevice as sd
+import soundfile as sf
+
+
+# Location services imports
+try:
+    import requests
+    REQUESTS_AVAILABLE = True
+except ImportError:
+    REQUESTS_AVAILABLE = False
+    print("Warning: requests not available. Location sharing will be disabled.")
+
+try:
+    import urllib.parse
+    URLLIB_AVAILABLE = True
+except ImportError:
+    URLLIB_AVAILABLE = False
+    print("Warning: urllib not available. Some location features may not work.")
+
+# Try to import winrt for Windows device location
+try:
+    import asyncio
+    try:
+        from winsdk.windows.devices.geolocation import Geolocator, PositionStatus # type: ignore
+        WINRT_AVAILABLE = True
+    except ImportError:
+        WINRT_AVAILABLE = False
+        print("Warning: winsdk not available. Device location will use IP geolocation fallback.")
+        print("To enable device-based geolocation, install winsdk with: python -m pip install winsdk")
+except ImportError:
+    WINRT_AVAILABLE = False
+    print("Warning: winrt not available. Device location will use IP geolocation fallback.")
+    print("To enable device-based geolocation, install winrt with: pip install winrt")
+
 # CONFIGURATION - Change emergency contact number here
-DEFAULT_EMERGENCY_CONTACT = "+91 9632168509"
+DEFAULT_EMERGENCY_CONTACT = "+91 9901306389"
+
+#message change
+DEFAULT_EMERGENCY_MESSAGE = "Hello. I am in an emergency situation. I need your help. My location is shared via through WhatsApp."
 
 # WINDOW CONFIGURATION
 WINDOW_NAME = "OptiBlink"
 
-# Suppress TensorFlow informational messages EARLY
+# Suppress TensorFlow informational messages EARLYq
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
@@ -31,6 +71,7 @@ import keyboard
 mp = None  # Will be imported when EyeTracker is created
 pygame = None  # Will be imported when TTS is first used
 gTTS = None  # Will be imported when TTS is first used
+ # Will be imported when TTS is first used
 
 # Windows-specific imports
 try:
@@ -101,6 +142,122 @@ def save_config(config):
             json.dump(config, f, indent=2)
     except Exception as e:
         print(f"Error saving config: {e}")
+
+
+def get_current_location():
+    """Get current location using Windows device location if available, else IP geolocation services"""
+    # Try Windows device location first
+    if WINRT_AVAILABLE:
+        try:
+            async def get_winrt_location():
+                locator = Geolocator()
+                pos = await locator.get_geoposition_async()
+                lat = pos.coordinate.point.position.latitude
+                lon = pos.coordinate.point.position.longitude
+                accuracy = pos.coordinate.accuracy
+                return lat, lon, accuracy
+
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            lat, lon, accuracy = loop.run_until_complete(get_winrt_location())
+            print(f"✅ Device location found: {lat}, {lon} (accuracy: {accuracy}m)")
+            location_info = {
+                'latitude': lat,
+                'longitude': lon,
+                'city': 'Device',
+                'region': '',
+                'country': '',
+                'google_maps_url': f"https://maps.google.com/?q={lat},{lon}",
+                'address': f"Device location (accuracy: {accuracy}m)"
+            }
+            return location_info
+        except Exception as e:
+            print(f"⚠️ Device location failed: {e}. Falling back to IP geolocation.")
+
+    # Fallback to IP geolocation
+    try:
+        if not REQUESTS_AVAILABLE:
+            print("⚠️ Requests module not available for location services")
+            return None
+
+        services = [
+            "http://ip-api.com/json/",
+            "https://ipapi.co/json/",
+            "https://ipinfo.io/json"
+        ]
+        for service_url in services:
+            try:
+                print(f"🌍 Trying location service: {service_url}")
+                response = requests.get(service_url, timeout=5)
+                if response.status_code == 200:
+                    data = response.json()
+                    if service_url.startswith("http://ip-api.com"):
+                        if data.get('status') == 'success':
+                            lat = data.get('lat')
+                            lon = data.get('lon')
+                            city = data.get('city', 'Unknown')
+                            region = data.get('regionName', 'Unknown')
+                            country = data.get('country', 'Unknown')
+                            if lat and lon:
+                                location_info = {
+                                    'latitude': lat,
+                                    'longitude': lon,
+                                    'city': city,
+                                    'region': region,
+                                    'country': country,
+                                    'google_maps_url': f"https://maps.google.com/?q={lat},{lon}",
+                                    'address': f"{city}, {region}, {country} (IP-based)"
+                                }
+                                print(f"✅ Location found: {location_info['address']}")
+                                return location_info
+                    elif service_url.startswith("https://ipapi.co"):
+                        lat = data.get('latitude')
+                        lon = data.get('longitude')
+                        city = data.get('city', 'Unknown')
+                        region = data.get('region', 'Unknown')
+                        country = data.get('country_name', 'Unknown')
+                        if lat and lon:
+                            location_info = {
+                                'latitude': lat,
+                                'longitude': lon,
+                                'city': city,
+                                'region': region,
+                                'country': country,
+                                'google_maps_url': f"https://maps.google.com/?q={lat},{lon}",
+                                'address': f"{city}, {region}, {country} (IP-based)"
+                            }
+                            print(f"✅ Location found: {location_info['address']}")
+                            return location_info
+                    elif service_url.startswith("https://ipinfo.io"):
+                        loc = data.get('loc')
+                        city = data.get('city', 'Unknown')
+                        region = data.get('region', 'Unknown')
+                        country = data.get('country', 'Unknown')
+                        if loc and ',' in loc:
+                            lat, lon = loc.split(',')
+                            lat, lon = float(lat.strip()), float(lon.strip())
+                            location_info = {
+                                'latitude': lat,
+                                'longitude': lon,
+                                'city': city,
+                                'region': region,
+                                'country': country,
+                                'google_maps_url': f"https://maps.google.com/?q={lat},{lon}",
+                                'address': f"{city}, {region}, {country} (IP-based)"
+                            }
+                            print(f"✅ Location found: {location_info['address']}")
+                            return location_info
+            except requests.exceptions.RequestException as e:
+                print(f"⚠️ Location service {service_url} failed: {e}")
+                continue
+            except Exception as e:
+                print(f"⚠️ Error parsing location from {service_url}: {e}")
+                continue
+        print("⚠️ All location services failed")
+        return None
+    except Exception as e:
+        print(f"❌ Location detection failed: {e}")
+        return None
 
 # Load words from CSV or fallback to NLTK - OPTIMIZED FOR FAST STARTUP
 def load_words_from_csv(csv_path, column_name="Word"):
@@ -395,8 +552,22 @@ class EyeTracker:
         print(f"📱 Formatted number: {clean_number}")
         
         try:
-            # Method 1: Send WhatsApp message with improved reliability
-            emergency_message = "🚨 EMERGENCY ALERT! I need immediate help. This is an automated SOS message from OptiBlink. Please contact me urgently!"
+            # Get current location for emergency message
+            print("🌍 Getting location for emergency message...")
+            location_info = get_current_location()
+            
+            # Create emergency message with location
+            base_message = "🚨 EMERGENCY ALERT! I need immediate help. This is an automated SOS message from OptiBlink. Please contact me urgently!"
+            
+            if location_info:
+                emergency_message = f"{base_message}\n\n📍 My location: {location_info['address']}\n🗺️ Google Maps: {location_info['google_maps_url']}\n📱 Coordinates: {location_info['latitude']}, {location_info['longitude']}"
+                print(f"📍 Location added to emergency message: {location_info['address']}")
+            else:
+                emergency_message = f"{base_message}\n\n📍 Location: Unable to determine current location"
+                print("⚠️ Could not get location - sending message without location info")
+            
+            # Also include the DEFAULT_EMERGENCY_MESSAGE
+            emergency_message += f"\n\n ⚠️⚠️EMERGENCY⚠️⚠️: {DEFAULT_EMERGENCY_MESSAGE}"
             
             print("📲 Sending WhatsApp emergency message...")
             
@@ -406,8 +577,15 @@ class EyeTracker:
                 print("🌐 Configuration set to prefer WhatsApp Web - skipping app")
                 whatsapp_opened = False
             else:
-                whatsapp_msg_url = f"whatsapp://send?phone={clean_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
-                print(f"🔗 WhatsApp URL: {whatsapp_msg_url}")
+                # Properly encode the emergency message for URL
+                if URLLIB_AVAILABLE:
+                    encoded_message = urllib.parse.quote(emergency_message)
+                else:
+                    # Fallback encoding for special characters
+                    encoded_message = emergency_message.replace(' ', '%20').replace('!', '%21').replace('\n', '%0A').replace(':', '%3A').replace('?', '%3F').replace('&', '%26').replace('=', '%3D')
+                
+                whatsapp_msg_url = f"whatsapp://send?phone={clean_number}&text={encoded_message}"
+                print(f"🔗 WhatsApp URL: {whatsapp_msg_url[:100]}..." if len(whatsapp_msg_url) > 100 else f"🔗 WhatsApp URL: {whatsapp_msg_url}")
                 
                 # Try WhatsApp app first, then fallback to WhatsApp Web
                 try:
@@ -422,14 +600,14 @@ class EyeTracker:
                 if WIN32_AVAILABLE and whatsapp_opened:
                     try:
                         def find_whatsapp():
-                            def enum_callback(hwnd, windows):
+                            windows = []
+                            def enum_callback(hwnd, windows_list):
                                 if win32gui.IsWindowVisible(hwnd):
                                     title = win32gui.GetWindowText(hwnd).lower()
                                     if 'whatsapp' in title and len(title) > 0:
-                                        windows.append((hwnd, win32gui.GetWindowText(hwnd)))
+                                        windows_list.append((hwnd, win32gui.GetWindowText(hwnd)))
                                 return True
-                            
-                            windows = []
+
                             win32gui.EnumWindows(enum_callback, windows)
                             return windows[0] if windows else (0, "")
                         
@@ -450,8 +628,16 @@ class EyeTracker:
                 print("   • May need QR code scan if not previously logged in")
                 # Format number for WhatsApp Web (remove + if present)
                 web_number = clean_number.replace('+', '')
-                whatsapp_web_url = f"https://web.whatsapp.com/send?phone={web_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
-                print(f"🔗 WhatsApp Web URL: {whatsapp_web_url}")
+                
+                # Properly encode the emergency message for URL
+                if URLLIB_AVAILABLE:
+                    encoded_message = urllib.parse.quote(emergency_message)
+                else:
+                    # Fallback encoding for special characters
+                    encoded_message = emergency_message.replace(' ', '%20').replace('!', '%21').replace('\n', '%0A').replace(':', '%3A').replace('?', '%3F').replace('&', '%26').replace('=', '%3D')
+                
+                whatsapp_web_url = f"https://web.whatsapp.com/send?phone={web_number}&text={encoded_message}"
+                print(f"🔗 WhatsApp Web URL: {whatsapp_web_url[:100]}..." if len(whatsapp_web_url) > 100 else f"🔗 WhatsApp Web URL: {whatsapp_web_url}")
                 webbrowser.open(whatsapp_web_url)
                 time.sleep(10)  # Extra time for WhatsApp Web to load
                 print("✅ WhatsApp Web opened - may require QR code scan if not logged in")
@@ -464,7 +650,8 @@ class EyeTracker:
                         # Find WhatsApp window (app or web) specifically
                         try:
                             def find_whatsapp_any():
-                                def enum_callback(hwnd, windows):
+                                windows = []
+                                def enum_callback(hwnd, windows_list):
                                     if win32gui.IsWindowVisible(hwnd):
                                         title = win32gui.GetWindowText(hwnd).lower()
                                         # Check for both WhatsApp app and WhatsApp Web in browser
@@ -472,13 +659,12 @@ class EyeTracker:
                                            ('whatsapp web' in title) or \
                                            (title.startswith('whatsapp') and 'browser' in title) or \
                                            ('web.whatsapp.com' in title):
-                                            windows.append((hwnd, win32gui.GetWindowText(hwnd)))
+                                            windows_list.append((hwnd, win32gui.GetWindowText(hwnd)))
                                     return True
-                                
-                                windows = []
+
                                 win32gui.EnumWindows(enum_callback, windows)
                                 return windows[0] if windows else (0, "")
-                            
+
                             whatsapp_hwnd, whatsapp_title = find_whatsapp_any()
                             if whatsapp_hwnd != 0:
                                 print(f"📱 Found WhatsApp: {whatsapp_title}")
@@ -617,33 +803,36 @@ class EyeTracker:
                 # Wait for dialer to load completely
                 print("⏳ Waiting for dialer to load...")
                 time.sleep(3)
+                # TTS says 'help' after callee attends the call
+                print("🔊 TTS: Saying 'help' after call is attended...")
+                self.speak("help")
                 
                 if PYAUTOGUI_AVAILABLE:
                     # Focus specifically on Phone Link and call immediately
                     print("🔄 Focusing on Phone Link window...")
                     if WIN32_AVAILABLE:
                         try:
+                            # Find Phone Link window specifically
                             def find_phone_link():
-                                def enum_callback(hwnd, windows):
+                                windows = []
+                                def enum_callback(hwnd, windows_list):
                                     if win32gui.IsWindowVisible(hwnd):
                                         title = win32gui.GetWindowText(hwnd).lower()
-                                        phone_keywords = ['phone link', 'your phone', 'phone', 'dialer', 'call']
-                                        if any(keyword in title for keyword in phone_keywords) and len(title) > 0:
-                                            windows.append((hwnd, win32gui.GetWindowText(hwnd)))
+                                        if ('phone' in title and 'link' in title) or 'your phone' in title:
+                                            windows_list.append((hwnd, win32gui.GetWindowText(hwnd)))
                                     return True
-                                
-                                windows = []
+
                                 win32gui.EnumWindows(enum_callback, windows)
                                 return windows[0] if windows else (0, "")
-                            
+
                             phone_hwnd, phone_title = find_phone_link()
                             if phone_hwnd != 0:
-                                print(f"📱 Found Phone app: {phone_title}")
+                                print(f"📱 Found Phone Link: {phone_title}")
                                 win32gui.SetForegroundWindow(phone_hwnd)
                                 time.sleep(2)
-                                print("✅ Phone app window focused!")
+                                print("✅ Phone Link window focused!")
                             else:
-                                print("⚠️ Phone app window not found, using Alt+Tab")
+                                print("⚠️ Phone Link window not found, using Alt+Tab")
                                 pyautogui.hotkey('alt', 'tab')
                                 time.sleep(2)
                         except Exception as phone_focus_error:
@@ -677,6 +866,11 @@ class EyeTracker:
                         pyautogui.press('enter')
                         time.sleep(1)
                         print("✅ SOS call placed successfully!")
+                        # CHANGE 1 TEST
+                        print("🔊 Preparing to speak emergency message...")
+                        time.sleep(8)  # Adjust if needed
+                        self.speak(DEFAULT_EMERGENCY_MESSAGE)
+                        
                             
                     else:
                         # Fallback to simple pyautogui if Windows API not available
@@ -763,6 +957,9 @@ class EyeTracker:
             # Wait for dialer to load completely
             print("⏳ Waiting for dialer to load...")
             time.sleep(3)
+            # TTS says 'help' after callee attends the call
+            print("🔊 TTS: Saying 'help' after call is attended...")
+            self.speak("help")
             
             if PYAUTOGUI_AVAILABLE:
                 # Focus specifically on Phone Link and call immediately
@@ -805,17 +1002,20 @@ class EyeTracker:
                             pyautogui.hotkey('ctrl', 'home')  # Go to beginning
                             time.sleep(0.5)
                             
-                            # Single tab to call button (since it works on first try)
+                            # Single tab to call button
                             print("� Navigating to call button...")
                             pyautogui.press('tab')
                             time.sleep(0.3)
-                            
                             # Activate call button with Enter key (Space only dials, Enter calls)
                             print("📞 Placing call...")
                             pyautogui.press('enter')
                             time.sleep(1)
-                            print("✅ Call placed successfully!")
                             
+                            #CHANGE 2
+                            # Wait briefly before speaking
+                            print("🔊 Speaking emergency message...")
+                            time.sleep(15)  # Adjusted to 15 seconds based on user preference
+                            self.speak(DEFAULT_EMERGENCY_MESSAGE)
                             print("🔄 OptiBlink keyboard monitoring will resume automatically")
                             
                             print("✅ Emergency call attempts completed!")
@@ -829,7 +1029,6 @@ class EyeTracker:
                             except Exception as final_check_error:
                                 print(f"⚠️ Final visibility check failed: {final_check_error}")
                             
-                            return True
                         else:
                             print("⚠️ Phone Link not found, call may need manual confirmation")
                     except Exception as call_error:
@@ -889,20 +1088,54 @@ class EyeTracker:
             clean_number = DEFAULT_EMERGENCY_CONTACT.replace(" ", "").replace("-", "")
             print(f"📞 Emergency Contact: {clean_number}")
             
+            # Get current location
+            print("🌍 Getting current location...")
+            location_info = get_current_location()
+            
+            # Create emergency message with location
+            base_message = "🚨 EMERGENCY! I need immediate help. This is an automated SOS from OptiBlink. Please call me urgently!"
+            
+            if location_info:
+                # Clarify if device or IP-based
+                if 'Device location' in location_info['address']:
+                    location_type = '📡 Accurate device location'
+                else:
+                    location_type = '🌐 Approximate IP-based location'
+                emergency_message = (
+                    f"{base_message}\n\n{location_type}: {location_info['address']}"
+                    f"\n🗺️ Google Maps: {location_info['google_maps_url']}"
+                    f"\n📱 Coordinates: {location_info['latitude']}, {location_info['longitude']}"
+                )
+                print(f"📍 Location added to emergency message: {location_info['address']} ({location_type})")
+            else:
+                emergency_message = f"{base_message}\n\n📍 Location: Unable to determine current location"
+                print("⚠️ Could not get location - sending message without location info")
+            # Also use the DEFAULT_EMERGENCY_MESSAGE content
+            emergency_message += f"\n\n📝 Additional info: {DEFAULT_EMERGENCY_MESSAGE}"
+            
+            print(f"📝 Emergency message prepared: {len(emergency_message)} characters")
+            
             # Make window fully visible during emergency
             self.set_window_transparency(WINDOW_NAME, 1.0)  # Full opacity
             print("🔍 Window made fully visible for emergency")
             
             # STEP 1: Send WhatsApp message - TRY APP FIRST, then Web fallback
-            print("📲 Sending WhatsApp SOS message...")
-            emergency_message = "🚨 EMERGENCY! I need immediate help. This is an automated SOS from OptiBlink. Please call me urgently!"
+            print("📲 Sending WhatsApp SOS message with location...")
             whatsapp_success = False
             
             try:
                 # METHOD 1: Try WhatsApp APP first
                 print("📱 Trying WhatsApp APP first...")
-                whatsapp_app_url = f"whatsapp://send?phone={clean_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
-                print(f"🔗 WhatsApp App URL: {whatsapp_app_url}")
+                
+                # Properly encode the emergency message for URL
+                if URLLIB_AVAILABLE:
+                    encoded_message = urllib.parse.quote(emergency_message)
+                else:
+                    # Fallback encoding for special characters
+                    encoded_message = emergency_message.replace(' ', '%20').replace('!', '%21').replace('\n', '%0A').replace(':', '%3A').replace('?', '%3F').replace('&', '%26').replace('=', '%3D')
+                
+                whatsapp_app_url = f"whatsapp://send?phone={clean_number}&text={encoded_message}"
+                print(f"🔗 WhatsApp App URL: {whatsapp_app_url[:100]}..." if len(whatsapp_app_url) > 100 else f"🔗 WhatsApp App URL: {whatsapp_app_url}")
                 
                 webbrowser.open(whatsapp_app_url)
                 time.sleep(4)  # Wait for app to load
@@ -954,8 +1187,16 @@ class EyeTracker:
                 try:
                     print("🌐 Falling back to WhatsApp Web...")
                     web_number = clean_number.replace('+', '')
-                    whatsapp_web_url = f"https://web.whatsapp.com/send?phone={web_number}&text={emergency_message.replace(' ', '%20').replace('!', '%21')}"
-                    print(f"🌐 WhatsApp Web URL: {whatsapp_web_url}")
+                    
+                    # Properly encode the emergency message for URL
+                    if URLLIB_AVAILABLE:
+                        encoded_message = urllib.parse.quote(emergency_message)
+                    else:
+                        # Fallback encoding for special characters
+                        encoded_message = emergency_message.replace(' ', '%20').replace('!', '%21').replace('\n', '%0A').replace(':', '%3A').replace('?', '%3F').replace('&', '%26').replace('=', '%3D')
+                    
+                    whatsapp_web_url = f"https://web.whatsapp.com/send?phone={web_number}&text={encoded_message}"
+                    print(f"🌐 WhatsApp Web URL: {whatsapp_web_url[:100]}..." if len(whatsapp_web_url) > 100 else f"🌐 WhatsApp Web URL: {whatsapp_web_url}")
                     webbrowser.open(whatsapp_web_url)
                     time.sleep(4)  # Wait for web to load
                     
@@ -1100,7 +1341,12 @@ class EyeTracker:
                 
             # Always speak SOS message
             print("🔊 Speaking SOS message...")
-            self.speak(f"Emergency SOS activated. Calling {clean_number}")
+            if location_info:
+                spoken_message = f"Emergency SOS activated. Calling {clean_number}. Location shared: {location_info['city']}, {location_info['region']}. Hello, I am in an emergency. I need your help. Location sent via WhatsApp"
+            else:
+                spoken_message = f"Emergency SOS activated. Calling {clean_number}. Location could not be determined."
+            
+            self.speak(spoken_message)
             
             # Record the emergency
             self.message_history.append(f"🚨 EMERGENCY SOS - {clean_number}")
@@ -1111,9 +1357,9 @@ class EyeTracker:
             self.morse_char_buffer = ""
             self.last_sent_len = 0
             
+
             print("✅ Emergency SOS procedure completed!")
-            return True
-            
+        
         except Exception as e:
             print(f"❌ CRITICAL: Emergency SOS failed: {e}")
             print(f"📞 MANUAL ACTION REQUIRED: CALL {DEFAULT_EMERGENCY_CONTACT} IMMEDIATELY!")
@@ -1350,46 +1596,23 @@ class EyeTracker:
                 
                 # Draw main text
                 cv2.putText(keyboard_img, display_text, (text_x, text_y), font, font_scale, text_col, text_thickness)
-                
-                # Draw morse code below with improved visibility and proper bounds checking
-                if morse_code and morse_code != display_text and len(morse_code) <= 6:
-                    # Dynamic font scaling and thickness for morse code
-                    morse_font_scale = 0.35 if len(display_text) > 6 else 0.45
-                    # Thinner morse code for better readability, especially on busy keys
-                    morse_thickness = 1  # Always use thickness 1 for Morse code for clarity
-                    
-                    # Ensure morse code fits within key width
-                    for attempt in range(3):
-                        (morse_w, morse_h), _ = cv2.getTextSize(morse_code, font, morse_font_scale, morse_thickness)
-                        if morse_w <= key_width - 6:  # 3px padding on each side
-                            break
-                        morse_font_scale *= 0.85  # Reduce size
-                        if morse_font_scale < 0.25:
-                            morse_font_scale = 0.25
-                            break
-                    
-                    # High contrast colors for morse code
-                    if is_highlighted:
-                        morse_color = (255, 255, 0)  # Bright yellow
-                    else:
-                        morse_color = (255, 255, 255)  # White
-                        outline_color = (0, 0, 0)  # Black outline
-                    
-                    # Center morse code within key boundaries with bounds checking
-                    morse_x = max(current_x + 3, current_x + (key_width - morse_w) // 2)  # 3px left margin
-                    morse_x = min(morse_x, current_x + key_width - morse_w - 3)  # 3px right margin
-                    morse_y = key_y + key_height - 6  # Space from bottom
-                    
-                    # Draw black outline for better contrast (only for non-highlighted keys)
-                    if not is_highlighted:
-                        # 4-direction outline for morse code (cleaner than 8-direction)
-                        for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
-                            cv2.putText(keyboard_img, morse_code, (morse_x + dx, morse_y + dy), 
-                                       font, morse_font_scale, outline_color, 1)  # Always use thickness 1 for outlines
-                    
-                    # Draw main morse code text
-                    cv2.putText(keyboard_img, morse_code, (morse_x, morse_y), 
-                               font, morse_font_scale, morse_color, morse_thickness)
+
+                # Draw morse code below the main key text, always bold and clear
+                morse_font_scale = min(font_scale + 0.5, 0.4)  # Slightly larger but capped
+                morse_thickness = 2# Always bold
+                morse_text = morse_code
+                morse_text_w, morse_text_h = cv2.getTextSize(morse_text, font, morse_font_scale, morse_thickness)[0]
+                morse_x = max(current_x + 4, current_x + (key_width - morse_text_w) // 2)
+                morse_x = min(morse_x, current_x + key_width - morse_text_w - 4)
+                morse_y = text_y + text_h + 12  # Place below main text
+                # Draw black outline for contrast if not highlighted
+                if not is_highlighted:
+                    outline_color = (0, 0, 0)
+                    for dx, dy in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        cv2.putText(keyboard_img, morse_text, (morse_x + dx, morse_y + dy), font, morse_font_scale, outline_color, 1)
+                # Draw main morse code text (bold)
+                morse_color = (0, 0, 0) if is_highlighted else (255, 255, 255)  # Black if highlighted, else white
+                cv2.putText(keyboard_img, morse_text, (morse_x, morse_y), font, morse_font_scale, morse_color, morse_thickness)
                 
                 # Move to next key position with consistent gap
                 current_x += key_width + key_gap
@@ -1451,11 +1674,7 @@ class EyeTracker:
 
         is_blink = (smoothed_ear / self.ear_baseline) < 0.7 or (smoothed_area / self.area_baseline) < 0.7
         return is_blink, smoothed_ear, smoothed_area
-
-    def speak(self, text):
-        if text and text.strip():
-            threading.Thread(target=self._speak_blocking, args=(text,), daemon=True).start()
-
+    
     def _speak_blocking(self, text):
         try:
             self.is_speaking = True
@@ -1501,6 +1720,41 @@ class EyeTracker:
             print(f"TTS Error: {e}")
             self.is_speaking = False
             self.speaking_message = ""
+
+    def speak(self, text, non_blocking=True):
+        """Speak text using TTS. By default runs non-blocking in a daemon thread.
+
+        If non_blocking is False, this will call the blocking implementation.
+        """
+        try:
+            if not non_blocking:
+                return self._speak_blocking(text)
+
+            # If already speaking, queue a short wait and then speak new text
+            if self.is_speaking:
+                # Spawn a short thread to wait for current speech to finish before speaking
+                def delayed_speak():
+                    # Wait up to 5 seconds for current speech to finish
+                    waited = 0
+                    while self.is_speaking and waited < 5:
+                        time.sleep(0.1)
+                        waited += 0.1
+                    try:
+                        self._speak_blocking(text)
+                    except Exception as e:
+                        print(f"TTS delayed speak failed: {e}")
+
+                t = threading.Thread(target=delayed_speak, daemon=True)
+                t.start()
+                return None
+
+            # Normal non-blocking path: run in a daemon thread
+            t = threading.Thread(target=self._speak_blocking, args=(text,), daemon=True)
+            t.start()
+            return None
+        except Exception as e:
+            print(f"TTS speak wrapper error: {e}")
+            return None
 
     def process_special_character(self, char):
         # EMERGENCY SOS OVERRIDE - ALWAYS allow SOS to work regardless of any restrictions
@@ -1768,8 +2022,11 @@ class EyeTracker:
                         print(f"\n*** SYSTEM {status} ***")
                         print(f"Sleep/Wake toggle activated after {self.sleep_wake_threshold} seconds")
                         
-                        if self.tts_enabled:
-                            self.speak(f"System {status.lower()}")
+                        # Always announce sleep mode changes (regardless of TTS setting)
+                        if self.is_system_active:
+                            self._speak_blocking("Sleep mode deactivated")
+                        else:
+                            self.speak("Sleep mode activated")
                         
                         # Reset timer to prevent immediate re-triggering
                         self.eyes_closed_start_time = 0
@@ -2062,6 +2319,8 @@ def main():
                             if abs(current_x - x_pos) < 50 and abs(current_y - y_pos) < 50:
                                 window_positioned = True
                                 print("Window successfully positioned in top-right corner!")
+                        else:
+                            print("Warning: Could not verify window positioning - handle not found")
                     except Exception as verify_error:
                         print(f"Could not verify position: {verify_error}")
                 else:
