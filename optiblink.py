@@ -1,6 +1,25 @@
 # Standard library imports
 import sys
 sys.stdout.reconfigure(encoding='utf-8')
+
+# Environment variable suppression for protobuf warnings (must be before imports)
+import os
+os.environ['PYTHONWARNINGS'] = 'ignore::UserWarning:google.protobuf.symbol_database'
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings too
+
+# Comprehensive warning suppression for cleaner startup (must be before other imports)
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf.symbol_database")
+warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
+warnings.filterwarnings("ignore", message=".*SymbolDatabase.GetPrototype.*")
+warnings.filterwarnings("ignore", message=".*GetPrototype.*deprecated.*")
+warnings.filterwarnings("ignore", message=".*GetMessageClass.*")
+warnings.filterwarnings("ignore", message=".*symbol_database.*")
+
+# Additional specific protobuf warning suppression
+import logging
+logging.getLogger('google.protobuf.symbol_database').setLevel(logging.ERROR)
+
 import csv
 import ctypes
 import json
@@ -49,7 +68,7 @@ except ImportError:
     print("To enable device-based geolocation, install winrt with: pip install winrt")
 
 # CONFIGURATION - Change emergency contact number here
-DEFAULT_EMERGENCY_CONTACT = "+91 9901306389"
+DEFAULT_EMERGENCY_CONTACT = "+91 9632168509"
 
 #message change
 DEFAULT_EMERGENCY_MESSAGE = "Hello. I am in an emergency situation. I need your help. My location is shared via through WhatsApp."
@@ -57,10 +76,41 @@ DEFAULT_EMERGENCY_MESSAGE = "Hello. I am in an emergency situation. I need your 
 # WINDOW CONFIGURATION
 WINDOW_NAME = "OptiBlink"
 
-# Suppress TensorFlow informational messages EARLYq
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+# Suppress TensorFlow informational messages EARLY
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress all TF messages including warnings
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+
+# Suppress protobuf warnings specifically
+os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
+
+# Suppress additional warnings
+import warnings
+warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", message=".*SymbolDatabase.GetPrototype.*")
+warnings.filterwarnings("ignore", message=".*inference_feedback_manager.*")
+warnings.filterwarnings("ignore", message=".*GetPrototype.*deprecated.*")
+warnings.filterwarnings("ignore", message=".*message_factory.GetMessageClass.*")
+
+# Suppress ABSL logging and TensorFlow Lite warnings
+os.environ['ABSL_LOGGING_LEVEL'] = '3'
+os.environ['TF_LITE_LOG_LEVEL'] = '3'
+os.environ['GLOG_minloglevel'] = '3'  # Google logging
+os.environ['GLOG_v'] = '0'  # Verbose logging off
+
+# Suppress specific TensorFlow messages
+import logging
+logging.getLogger('tensorflow').setLevel(logging.ERROR)
+logging.getLogger('absl').setLevel(logging.ERROR)
+logging.getLogger('google.protobuf').setLevel(logging.ERROR)
+logging.getLogger('google.protobuf.symbol_database').setLevel(logging.ERROR)
+
+# Redirect stderr to suppress MediaPipe/TensorFlow warnings during initialization
+import sys
+from contextlib import redirect_stderr
+import io
 
 # Core imports that are always needed
 import cv2
@@ -98,11 +148,15 @@ except ImportError:
     print("Warning: pyautogui not available. Some automation features may not work.")
 
 try:
-    from pywinauto import Application
+    # Additional protobuf warning suppression right before pywinauto import
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        warnings.filterwarnings("ignore", message=".*SymbolDatabase.GetPrototype.*")
+        from pywinauto import Application
     PYWINAUTO_AVAILABLE = True
 except ImportError:
     PYWINAUTO_AVAILABLE = False
-    print("Warning: pywinauto not available. Emergency phone calling may use fallback methods.")
+    # Suppressed: Emergency phone calling may use fallback methods
 
 # Configuration management
 def load_config():
@@ -268,7 +322,8 @@ def load_words_from_csv(csv_path, column_name="Word"):
             print(f"CSV file not found: {csv_path}. Will use NLTK if needed.")
             return words
             
-        print(f"EyeTracker: Loading words from {csv_path}...")
+        # Suppress loading message for cleaner startup
+        # print(f"Loading words from {csv_path}...")
         with open(csv_path, newline='', encoding='utf-8') as csvfile:
             reader = csv.DictReader(csvfile)
             # Only load first 3000 words for faster startup
@@ -280,18 +335,20 @@ def load_words_from_csv(csv_path, column_name="Word"):
                 if word and word.isalpha() and len(word) > 2:
                     words.append(word.lower())
                 count += 1
-        print(f"EyeTracker: Loaded {len(words)} words from CSV for fast startup")
+        # Suppress word count message for cleaner startup
+        # print(f"Loaded {len(words)} words from CSV")
     except Exception as e:
-        print(f"CSV loading error: {e}. Will use NLTK fallback if needed.")
+        # print(f"CSV loading error: {e}. Will use NLTK fallback if needed.")
+        pass
     return words
 
 # Load CSV words quickly - no NLTK loading at startup for speed
-print("EyeTracker: Fast startup - loading essential words only...")
+# print("EyeTracker: Fast startup - loading essential words only...")
 csv_word_list = load_words_from_csv(r"words.csv", column_name="Word")
 
 # Skip NLTK loading entirely at startup - defer until actually needed
 nltk_word_list = []
-print("EyeTracker: Word loading complete - NLTK deferred for speed!")
+# print("EyeTracker: Word loading complete - NLTK deferred for speed!")
 
 class TrieNode:
     def __init__(self):
@@ -300,7 +357,7 @@ class TrieNode:
 
 class AutoCompleteSystem:
     def __init__(self):
-        print("AutoComplete: Building word trees...")
+        # print("AutoComplete: Building word trees...")
         self.csv_root = TrieNode()
         self.nltk_root = TrieNode()
         self.frequency = defaultdict(int)
@@ -311,10 +368,10 @@ class AutoCompleteSystem:
             self.insert(word, root=self.csv_root)
         
         # Skip NLTK loading at startup for speed
-        print(f"AutoComplete: Loaded {len(csv_word_list)} CSV words quickly!")
+        # print(f"AutoComplete: Loaded {len(csv_word_list)} CSV words quickly!")
         
         self.load_usage_data()
-        print("AutoComplete: Ready!")
+        # print("AutoComplete: Ready!")
     
     def _ensure_nltk_loaded(self):
         """Load NLTK words only when actually needed"""
@@ -414,21 +471,21 @@ class AutoCompleteSystem:
 
 class EyeTracker:
     def __init__(self, auto):
-        print("EyeTracker: Fast initialization starting...")
+        # print("EyeTracker: Fast initialization starting...")
         self.auto = auto
         
         # Defer MediaPipe import and initialization for faster startup
         global mp
         if mp is None:
-            print("EyeTracker: Importing MediaPipe...")
+            # print("EyeTracker: Importing MediaPipe...")
             import mediapipe as mp_module
             mp = mp_module
         
-        print("EyeTracker: Setting up MediaPipe face mesh...")
+        # print("EyeTracker: Setting up MediaPipe face mesh...")
         self.mp_face_mesh = mp.solutions.face_mesh
         
         # Create FaceMesh with fastest possible settings
-        print("EyeTracker: Creating optimized FaceMesh...")
+        # print("EyeTracker: Creating optimized FaceMesh...")
         self.face_mesh = self.mp_face_mesh.FaceMesh(
             max_num_faces=1,
             refine_landmarks=False,  # Disable for speed
@@ -437,9 +494,9 @@ class EyeTracker:
         )
         
         # Initialize all other attributes quickly
-        print("EyeTracker: Setting up core systems...")
+        # print("EyeTracker: Setting up core systems...")
         self._initialize_morse_and_detection()
-        print("EyeTracker: Initialization complete!")
+        # print("EyeTracker: Initialization complete!")
 
     def _initialize_morse_and_detection(self):
         """Initialize morse code and eye detection systems"""
@@ -1214,126 +1271,46 @@ class EyeTracker:
             # STEP 2: Make phone call - AVOID CAST SCREEN BUTTON
             print("📞 Making emergency call...")
             try:
-                # Use tel: protocol to open phone dialer
-                subprocess.run(['start', '', f'tel:{clean_number}'], shell=True, check=False)
+                # Use simple os.system like working test.py approach
+                os.system(f'start tel:{clean_number}')
                 print(f"📱 Dialing {clean_number}...")
-                time.sleep(3)  # Wait longer for dialer to fully load
                 
-                # RELIABLE PHONE CALL using pywinauto (directly targets call button)
+                # Wait longer for Phone Link to load (5 seconds like working test)
+                time.sleep(5)
+                
+                # RELIABLE PHONE CALL using your working pywinauto method
                 if PYWINAUTO_AVAILABLE:
-                    print("🎯 Using RELIABLE pywinauto method to find actual call button...")
+                    print("🎯 Using tested working method to find call button...")
                     try:
-                        # Connect to Phone Link by process
-                        app = Application(backend="uia").connect(path="PhoneExperienceHost.exe")
-                        print("✅ Connected to Phone Link process")
+                        # Suppress any remaining protobuf warnings during pywinauto usage
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", UserWarning)
+                            warnings.filterwarnings("ignore", message=".*SymbolDatabase.GetPrototype.*")
+                            
+                            # Connect to Phone Link by process (exact same as your test.py)
+                            app = Application(backend="uia").connect(path="PhoneExperienceHost.exe")
                         
-                        # Get the main window
+                        # Get the main window and focus it
                         win = app.top_window()
                         win.set_focus()
-                        print("✅ Phone Link window focused")
                         
-                        # Find the Call button via AutomationId (most reliable method)
+                        # Find the Call button via AutomationId (exact same as your test.py)
                         call_btn = win.child_window(auto_id="ButtonCall", control_type="Button")
                         
                         if call_btn.exists():
                             call_btn.click_input()
-                            print("✅ CALL BUTTON CLICKED SUCCESSFULLY!")
+                            print("✅ Call button clicked successfully!")
                             print("📞 Emergency call should be connecting...")
                         else:
-                            print("⚠️ Call button not found by AutomationId, trying alternatives...")
-                            # Fallback to keyboard method
-                            if PYAUTOGUI_AVAILABLE:
-                                pyautogui.press('enter')
+                            print("⚠️ Call button not found.")
+                            raise Exception("Call button not found")
                         
                     except Exception as pywin_error:
                         print(f"⚠️ pywinauto method failed: {pywin_error}")
-                        print("🔄 Falling back to keyboard method...")
-                        if PYAUTOGUI_AVAILABLE:
-                            pyautogui.press('enter')
-                        else:
-                            print("📞 Manual call confirmation required!")
+                        print("📞 Manual call confirmation may be required!")
                             
-                elif PYAUTOGUI_AVAILABLE:
-                    print("⚠️ pywinauto not available, using basic keyboard method...")
-                    pyautogui.press('enter')
-                    print("📞 Basic call attempt made")
-                    print("🎯 Using SMART navigation to avoid cast screen button...")
-                    
-                    # Method 1: Use specific keyboard shortcuts for Phone Link
-                    print("📞 Trying Ctrl+Enter (Phone Link call shortcut)")
-                    pyautogui.hotkey('ctrl', 'enter')
-                    time.sleep(1)
-                    
-                    # Method 2: Use Tab to navigate AWAY from cast screen, then to call button
-                    print("⌨️ Using Tab navigation to find call button (avoiding cast screen)")
-                    # Reset focus to beginning of dialog
-                    pyautogui.hotkey('ctrl', 'home')
-                    time.sleep(0.5)
-                    
-                    # Tab navigation - usually call button is 2nd or 3rd tab stop
-                    for i in range(5):
-                        pyautogui.press('tab')
-                        time.sleep(0.3)
-                        # Try Space key (safer than Enter for buttons)
-                        pyautogui.press('space')
-                        time.sleep(0.5)
-                        print(f"📞 Tab attempt {i+1}: Pressed Space at tab position")
-                    
-                    # Method 3: Direct Alt+C (common call shortcut)
-                    print("📞 Trying Alt+C (common call shortcut)")
-                    pyautogui.hotkey('alt', 'c')
-                    time.sleep(1)
-                    
-                    # Method 4: Function key F5 (sometimes used for call)
-                    print("📞 Trying F5 key")
-                    pyautogui.press('f5')
-                    time.sleep(1)
-                    
-                    # Method 5: Look for Phone Link window and use mouse click on call button area
-                    if WIN32_AVAILABLE:
-                        try:
-                            print("🖱️ Trying mouse click approach...")
-                            def find_phone_window():
-                                def enum_callback(hwnd, windows):
-                                    if win32gui.IsWindowVisible(hwnd):
-                                        title = win32gui.GetWindowText(hwnd).lower()
-                                        if ('phone' in title and 'link' in title) or 'your phone' in title or 'phone' in title:
-                                            windows.append((hwnd, win32gui.GetWindowText(hwnd)))
-                                    return True
-                                
-                                windows = []
-                                win32gui.EnumWindows(enum_callback, windows)
-                                return windows[0] if windows else (0, "")
-                            
-                            phone_hwnd, phone_title = find_phone_window()
-                            if phone_hwnd != 0:
-                                print(f"� Found phone window: {phone_title}")
-                                # Get window position and size
-                                rect = win32gui.GetWindowRect(phone_hwnd)
-                                window_x, window_y, window_right, window_bottom = rect
-                                window_width = window_right - window_x
-                                window_height = window_bottom - window_y
-                                
-                                # Focus the window
-                                win32gui.SetForegroundWindow(phone_hwnd)
-                                time.sleep(1)
-                                
-                                # Click in the bottom right area where call button usually is
-                                # Avoid top area where cast screen button is
-                                call_x = window_x + int(window_width * 0.75)  # 75% from left
-                                call_y = window_y + int(window_height * 0.85)  # 85% from top (bottom area)
-                                
-                                print(f"🖱️ Clicking call area at ({call_x}, {call_y})")
-                                pyautogui.click(call_x, call_y)
-                                time.sleep(0.5)
-                                
-                        except Exception as mouse_error:
-                            print(f"⚠️ Mouse click method failed: {mouse_error}")
-                    
-                    print("✅ EMERGENCY CALL ATTEMPTS COMPLETED!")
-                    print("📞 Multiple methods tried to avoid cast screen button")
                 else:
-                    print("📞 Phone dialer opened - pyautogui not available, MANUAL CALL REQUIRED!")
+                    print("📞 Phone dialer opened - pywinauto not available, MANUAL CALL REQUIRED!")
                     
             except Exception as call_error:
                 print(f"❌ Phone call failed: {call_error}")
@@ -1392,7 +1369,8 @@ class EyeTracker:
                     alpha_value = int(alpha * 255)
                     win32gui.SetLayeredWindowAttributes(hwnd, 0, alpha_value, 
                                                       win32con.LWA_ALPHA)
-                    print(f"Window transparency set to {int(alpha*100)}%")
+                    # Suppress transparency message for cleaner output
+                    # print(f"Window transparency set to {int(alpha*100)}%")
                     return True
             else:
                 print("Transparency requires win32gui (install pywin32)")
@@ -1430,7 +1408,7 @@ class EyeTracker:
         
         # Debug info (will print once)
         if not hasattr(self, 'keyboard_debug_printed'):
-            print(f"Keyboard: width={width}, available={available_width}, base_key={base_key_width}")
+            # print(f"Keyboard: width={width}, available={available_width}, base_key={base_key_width}")
             self.keyboard_debug_printed = True
         
         # Enhanced colors for better visibility and accessibility
@@ -2166,25 +2144,43 @@ class EyeTracker:
         return frame
 
 def main():
-
+    print("🚀 OptiBlink - Eye Tracking Morse Code Interface")
+    print("=" * 50)
+    
     # Initialize camera first for immediate feedback
     print("📹 Initializing camera...")
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
         print("❌ Error: Could not open camera")
+        print("💡 Make sure your camera is connected and not being used by another application")
         return
-    print("✅ Camera ready!")
     
-    # Initialize systems with progress feedback
-    print("🧠 Loading AutoComplete system...")
-    auto = AutoCompleteSystem()
-    print("✅ AutoComplete ready!")
+    # Initialize systems with comprehensive stderr suppression
+    print("🧠 Loading AI models and systems...")
     
-    print("👁️ Initializing EyeTracker...")  
-    eye_tracker = EyeTracker(auto)
-    print("✅ EyeTracker ready!")
+    # Comprehensive stderr suppression for TensorFlow/MediaPipe warnings
+    import os
+    devnull = open(os.devnull, 'w')
+    old_stderr = sys.stderr
     
-    print("🖥️ Setting up window...")
+    try:
+        # Redirect stderr to devnull during initialization
+        sys.stderr = devnull
+        auto = AutoCompleteSystem()
+        eye_tracker = EyeTracker(auto)
+    finally:
+        # Always restore stderr
+        sys.stderr = old_stderr
+        devnull.close()
+    
+    print("✅ OptiBlink ready!")
+    print("👁️  Look at the camera and blink to start calibration")
+    print("📖 Morse code reference available in 'morse_keyboard.jpg'")
+    print("🆘 Emergency SOS: Blink pattern '......' (6 dots)")
+    print("❌ Press 'Q' or close window to exit")
+    print("=" * 50)
+    
+    # print("🖥️ Setting up window...")
     window_width = 800
     window_height = 550
 
@@ -2194,14 +2190,14 @@ def main():
         screen_width = user32.GetSystemMetrics(0)
         screen_height = user32.GetSystemMetrics(1)
         x_pos = screen_width - window_width - 30  # Increased margin for larger window
-        print(f"Screen dimensions: {screen_width}x{screen_height}")
-        print(f"Window size: {window_width}x{window_height}")
-        print(f"Calculated position: x={x_pos}, y=40")
-        print(f"This should place window at top-right corner with 30px margin")
+        # print(f"Screen dimensions: {screen_width}x{screen_height}")
+        # print(f"Window size: {window_width}x{window_height}")
+        # print(f"Calculated position: x={x_pos}, y=40")
+        # print(f"This should place window at top-right corner with 30px margin")
     except Exception as e:
         # Fallback to default position if Windows API is not available
         x_pos = 100
-        print(f"Warning: Could not get screen dimensions: {e}. Using default window position.")
+        # print(f"Warning: Could not get screen dimensions: {e}. Using default window position.")
     
     y_pos = 40  # Leave space for window controls
 
@@ -2238,7 +2234,7 @@ def main():
                 return False
         return False
 
-    print("Starting main loop...")
+    # print("Starting main loop...")
     
     # Variables for window positioning
     window_positioned = False
@@ -2301,7 +2297,8 @@ def main():
             # Position window in top-right corner (only try for first few frames)
             if not window_positioned and position_attempts < max_position_attempts:
                 position_attempts += 1
-                print(f"Positioning attempt {position_attempts}: trying to move to ({x_pos}, {y_pos})")
+                # Suppress positioning messages for cleaner output
+                # print(f"Positioning attempt {position_attempts}: trying to move to ({x_pos}, {y_pos})")
                 
                 # First, try OpenCV positioning (works immediately)
                 cv2.moveWindow(WINDOW_NAME, x_pos, y_pos)
@@ -2314,17 +2311,25 @@ def main():
                         if hwnd:
                             rect = win32gui.GetWindowRect(hwnd)
                             current_x, current_y = rect[0], rect[1]
-                            print(f"Window positioned at ({current_x}, {current_y}), target was ({x_pos}, {y_pos})")
+                            # Suppress positioning verification messages
+                            # print(f"Window positioned at ({current_x}, {current_y}), target was ({x_pos}, {y_pos})")
                             
                             if abs(current_x - x_pos) < 50 and abs(current_y - y_pos) < 50:
                                 window_positioned = True
-                                print("Window successfully positioned in top-right corner!")
+                                # Suppress success message for cleaner output
+                                # print("Window successfully positioned in top-right corner!")
                         else:
-                            print("Warning: Could not verify window positioning - handle not found")
+                            # Suppress warning for cleaner output
+                            # print("Warning: Could not verify window positioning - handle not found")
+                            pass
                     except Exception as verify_error:
-                        print(f"Could not verify position: {verify_error}")
+                        # Suppress error message for cleaner output
+                        # print(f"Could not verify position: {verify_error}")
+                        pass
                 else:
-                    print(f"Attempt {position_attempts}: Windows API positioning failed")
+                    # Suppress failure message for cleaner output
+                    # print(f"Attempt {position_attempts}: Windows API positioning failed")
+                    pass
                         
                 # If we've tried enough times, stop trying
                 if position_attempts >= max_position_attempts:
@@ -2348,7 +2353,8 @@ def main():
             if not hasattr(eye_tracker, '_permanent_transparency_set'):
                 eye_tracker.set_window_transparency(WINDOW_NAME, 0.85)  # 85% opacity permanently
                 eye_tracker._permanent_transparency_set = True
-                print(f"Window positioned at top-right corner: ({x_pos}, {y_pos})")
+                # Suppress final positioning message for cleaner output
+                # print(f"Window positioned at top-right corner: ({x_pos}, {y_pos})")
 
             # Robust window close detection
             try:
@@ -2371,7 +2377,8 @@ def main():
                 if q_pressed:
                     if not hasattr(eye_tracker, '_q_pressed') or not eye_tracker._q_pressed:
                         eye_tracker._q_pressed = True
-                        print("Q key pressed - exiting program")
+                        print("\n👋 OptiBlink shutting down...")
+                        print("💾 Saving usage data...")
                         break
                 else:
                     eye_tracker._q_pressed = False

@@ -1,10 +1,22 @@
+# Core computer vision and eye tracking
 opencv-python
 mediapipe
 numpy
-nltk
-keyboard
-pywin32
+
+# Audio processing and TTS
+sounddevice
+soundfile
 gtts
 pygame
-pyperclip
+
+# GUI automation and system integration
+keyboard
 pyautogui
+pyperclip
+pywinauto
+
+# Natural language processing
+nltk
+
+# Web requests for location services
+requests
