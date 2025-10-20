@@ -1,20 +1,23 @@
 # Standard library imports
 import sys
-sys.stdout.reconfigure(encoding='utf-8')
+
+if sys.stdout:
+    sys.stdout.reconfigure(encoding='utf-8')
+if sys.stderr:
+    sys.stderr.reconfigure(encoding='utf-8')
 
 # Environment variable suppression for protobuf warnings (must be before imports)
 import os
 os.environ['PYTHONWARNINGS'] = 'ignore::UserWarning:google.protobuf.symbol_database'
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings too
+# Align other logging env vars early
+os.environ['ABSL_LOGGING_MIN_LOG_LEVEL'] = '3'
+os.environ['GLOG_minloglevel'] = '3'
+
 
 # Comprehensive warning suppression for cleaner startup (must be before other imports)
 import warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf.symbol_database")
 warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
-warnings.filterwarnings("ignore", message=".*SymbolDatabase.GetPrototype.*")
-warnings.filterwarnings("ignore", message=".*GetPrototype.*deprecated.*")
-warnings.filterwarnings("ignore", message=".*GetMessageClass.*")
-warnings.filterwarnings("ignore", message=".*symbol_database.*")
 
 # Additional specific protobuf warning suppression
 import logging
@@ -23,7 +26,6 @@ logging.getLogger('google.protobuf.symbol_database').setLevel(logging.ERROR)
 import csv
 import ctypes
 import json
-import os
 import subprocess
 import tempfile
 import threading
@@ -32,9 +34,123 @@ import traceback
 import webbrowser
 from collections import deque, defaultdict
 
-import io
-import sounddevice as sd
-import soundfile as sf
+
+def resource_path(relative_path):
+    """Get absolute path to resource, works for dev and PyInstaller."""
+    try:
+        base_path = sys._MEIPASS  # For PyInstaller
+    except AttributeError:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+
+def get_config_path():
+    """Return a user-writable path for the app config file."""
+    base_dir = os.getenv('APPDATA') or os.getenv('LOCALAPPDATA') or os.path.expanduser('~')
+    cfg_dir = os.path.join(base_dir, 'OptiBlink')
+    try:
+        os.makedirs(cfg_dir, exist_ok=True)
+    except Exception:
+        pass
+    return os.path.join(cfg_dir, 'config.json')
+
+# Global config path constant used by config helpers
+CONFIG_PATH = get_config_path()
+
+
+def _encode_message_for_url(text):
+    """Encode message for use in URL query parameters with fallback when urllib is unavailable."""
+    try:
+        if URLLIB_AVAILABLE:
+            return urllib.parse.quote(text)
+    except Exception:
+        pass
+    # Fallback encoding for common special characters
+    return (
+        text.replace(' ', '%20')
+            .replace('!', '%21')
+            .replace('\n', '%0A')
+            .replace(':', '%3A')
+            .replace('?', '%3F')
+            .replace('&', '%26')
+            .replace('=', '%3D')
+    )
+
+
+def _fallback_copy_and_prompt(clean_number, label="EMERGENCY CALL"):
+    """Copy an emergency call prompt to clipboard if available and print manual prompt."""
+    try:
+        if PYPERCLIP_AVAILABLE:
+            try:
+                pyperclip.copy(f"{label} {clean_number}")
+                print(f"📋 Emergency number copied to clipboard: {clean_number}")
+            except Exception:
+                print(f"📞 Manual dial required: {clean_number}")
+        else:
+            print(f"📞 Manual dial required: {clean_number}")
+    except Exception:
+        print(f"📞 Manual dial required: {clean_number}")
+
+
+# Native (C-level) stderr redirection to swallow absl/TFLite C++ logs
+import contextlib
+
+@contextlib.contextmanager
+def _suppress_native_stderr():
+    """Suppress C++ level stderr output from TensorFlow/MediaPipe libraries"""
+    saved_fd = None
+    nul_fd = None
+    try:
+        saved_fd = os.dup(2)
+        nul_path = 'NUL' if os.name == 'nt' else '/dev/null'
+        nul_fd = os.open(nul_path, os.O_WRONLY)
+        os.dup2(nul_fd, 2)
+        os.close(nul_fd)
+        nul_fd = None
+        yield
+    finally:
+        try:
+            if saved_fd is not None:
+                os.dup2(saved_fd, 2)
+                os.close(saved_fd)
+        except Exception:
+            pass
+
+@contextlib.contextmanager
+def _suppress_all_warnings():
+    """Comprehensive warning suppression for MediaPipe/TensorFlow operations"""
+    # Save original stderr
+    original_stderr = sys.stderr
+    
+    # Save original logging levels
+    original_levels = {}
+    loggers_to_silence = ['tensorflow', 'absl', 'mediapipe', 'google.protobuf']
+    
+    for logger_name in loggers_to_silence:
+        logger = logging.getLogger(logger_name)
+        original_levels[logger_name] = logger.level
+        logger.setLevel(logging.ERROR)
+    
+    try:
+        # Redirect stderr to devnull during critical operations
+        import io
+        devnull = io.StringIO()
+        sys.stderr = devnull
+        
+        # Also suppress at the file descriptor level
+        with warnings.catch_warnings(), _suppress_native_stderr():
+            warnings.simplefilter("ignore")
+            warnings.filterwarnings('ignore', message='.*XNNPACK.*')
+            warnings.filterwarnings('ignore', message='.*inference_feedback_manager.*')
+            warnings.filterwarnings('ignore', message='.*TensorFlow Lite.*')
+            warnings.filterwarnings('ignore', message='.*Created TensorFlow Lite.*')
+            yield
+    finally:
+        # Restore original stderr
+        sys.stderr = original_stderr
+        # Restore original logging levels
+        for logger_name, original_level in original_levels.items():
+            logging.getLogger(logger_name).setLevel(original_level)
 
 
 # Location services imports
@@ -52,65 +168,29 @@ except ImportError:
     URLLIB_AVAILABLE = False
     print("Warning: urllib not available. Some location features may not work.")
 
-# Try to import winrt for Windows device location
+# Try to import winsdk for Windows device location (winrt deprecated)
 try:
     import asyncio
-    try:
-        from winsdk.windows.devices.geolocation import Geolocator, PositionStatus # type: ignore
-        WINRT_AVAILABLE = True
-    except ImportError:
-        WINRT_AVAILABLE = False
-        print("Warning: winsdk not available. Device location will use IP geolocation fallback.")
-        print("To enable device-based geolocation, install winsdk with: python -m pip install winsdk")
+    from winsdk.windows.devices.geolocation import Geolocator, PositionStatus # type: ignore
+    WINRT_AVAILABLE = True
 except ImportError:
     WINRT_AVAILABLE = False
-    print("Warning: winrt not available. Device location will use IP geolocation fallback.")
-    print("To enable device-based geolocation, install winrt with: pip install winrt")
+    print("Warning: winsdk not available. Device location will use IP geolocation fallback.")
+    print("To enable device-based geolocation, install winsdk with: python -m pip install winsdk")
 
 # CONFIGURATION - Change emergency contact number here
-DEFAULT_EMERGENCY_CONTACT = "+91 9632168509"
-
-#message change
-DEFAULT_EMERGENCY_MESSAGE = "Hello. I am in an emergency situation. I need your help. My location is shared via through WhatsApp."
+DEFAULT_EMERGENCY_CONTACT = "+91 9999999900"
 
 # WINDOW CONFIGURATION
 WINDOW_NAME = "OptiBlink"
 
-# Suppress TensorFlow informational messages EARLY
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress all TF messages including warnings
-os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
+# Additional environment variables for cleaner output
 os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'  # Disable GPU warnings if needed
 
 # Suppress protobuf warnings specifically
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 
-# Suppress additional warnings
-import warnings
-warnings.filterwarnings("ignore")
-warnings.filterwarnings("ignore", category=UserWarning)
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-warnings.filterwarnings("ignore", message=".*SymbolDatabase.GetPrototype.*")
-warnings.filterwarnings("ignore", message=".*inference_feedback_manager.*")
-warnings.filterwarnings("ignore", message=".*GetPrototype.*deprecated.*")
-warnings.filterwarnings("ignore", message=".*message_factory.GetMessageClass.*")
-
-# Suppress ABSL logging and TensorFlow Lite warnings
-os.environ['ABSL_LOGGING_LEVEL'] = '3'
-os.environ['TF_LITE_LOG_LEVEL'] = '3'
-os.environ['GLOG_minloglevel'] = '3'  # Google logging
-os.environ['GLOG_v'] = '0'  # Verbose logging off
-
-# Suppress specific TensorFlow messages
-import logging
-logging.getLogger('tensorflow').setLevel(logging.ERROR)
-logging.getLogger('absl').setLevel(logging.ERROR)
-logging.getLogger('google.protobuf').setLevel(logging.ERROR)
-logging.getLogger('google.protobuf.symbol_database').setLevel(logging.ERROR)
-
-# Redirect stderr to suppress MediaPipe/TensorFlow warnings during initialization
-import sys
-from contextlib import redirect_stderr
-import io
 
 # Core imports that are always needed
 import cv2
@@ -121,7 +201,6 @@ import keyboard
 mp = None  # Will be imported when EyeTracker is created
 pygame = None  # Will be imported when TTS is first used
 gTTS = None  # Will be imported when TTS is first used
- # Will be imported when TTS is first used
 
 # Windows-specific imports
 try:
@@ -160,39 +239,35 @@ except ImportError:
 
 # Configuration management
 def load_config():
-    """Load configuration from config.json file"""
-    config_file = "config.json"
+    """Load configuration from the user config path, prompting on first run."""
     default_config = {
-        "emergency_contact": DEFAULT_EMERGENCY_CONTACT,
-        "prefer_whatsapp_web": False  # Set to True to force WhatsApp Web over app
-                                     # Useful for users without WhatsApp desktop app
-                                     # or those who prefer web interface
+        "emergency_contact": "",
+        "prefer_whatsapp_web": False,
     }
-    
     try:
-        if os.path.exists(config_file):
-            with open(config_file, 'r') as f:
+        if os.path.exists(CONFIG_PATH):
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-                # ALWAYS use the centralized constant, ignore what's in the file
-                config["emergency_contact"] = DEFAULT_EMERGENCY_CONTACT
-                # Add prefer_whatsapp_web if not present
-                if "prefer_whatsapp_web" not in config:
-                    config["prefer_whatsapp_web"] = False
-                # Update the file to match the centralized constant
+            # Ensure expected keys exist
+            updated = False
+            for k, v in default_config.items():
+                if k not in config:
+                    config[k] = v
+                    updated = True
+            if updated:
                 save_config(config)
-                return config
+            return config
         else:
-            # Create default config file
-            save_config(default_config)
-            return default_config
+            # Prompt user and create config
+            return load_or_create_config()
     except Exception as e:
         print(f"Error loading config: {e}. Using defaults.")
         return default_config
 
 def save_config(config):
-    """Save configuration to config.json file"""
+    """Save configuration to the user config path"""
     try:
-        with open("config.json", 'w') as f:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(config, f, indent=2)
     except Exception as e:
         print(f"Error saving config: {e}")
@@ -344,11 +419,98 @@ def load_words_from_csv(csv_path, column_name="Word"):
 
 # Load CSV words quickly - no NLTK loading at startup for speed
 # print("EyeTracker: Fast startup - loading essential words only...")
-csv_word_list = load_words_from_csv(r"words.csv", column_name="Word")
+csv_word_list = load_words_from_csv(resource_path("words.csv"), column_name="Word")
 
 # Skip NLTK loading entirely at startup - defer until actually needed
 nltk_word_list = []
 # print("EyeTracker: Word loading complete - NLTK deferred for speed!")
+
+
+# Define config path (user-writable)
+# Note: CONFIG_PATH is created above using get_config_path()
+
+def load_or_create_config():
+    """Load user config, or prompt to create it on first run."""
+    default_config = {
+        "emergency_contact": "",
+        "prefer_whatsapp_web": False
+    }
+
+    # Case 1: File doesn't exist — prompt user and create
+    if not os.path.exists(CONFIG_PATH):
+        print("🔧 No configuration found. Let's set it up!")
+
+        try:
+            phone = input("Enter your emergency contact number (e.g. +91 9876543210): ").strip()
+            use_whatsapp = input("Prefer WhatsApp Web for alerts? (y/n): ").strip().lower() == "y"
+        except Exception:
+            # If stdin is not available (e.g., no console), keep defaults
+            phone = ""
+            use_whatsapp = False
+
+        default_config["emergency_contact"] = phone
+        default_config["prefer_whatsapp_web"] = use_whatsapp
+
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(default_config, f, indent=4)
+            print("✅ Configuration file created successfully!\n")
+        except Exception as e:
+            print(f"⚠️ Could not write configuration file: {e}")
+
+        return default_config
+
+    # Case 2: File exists — load it
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        config_data = json.load(f)
+
+    # Validate fields (in case user deleted one)
+    updated = False
+    for key in ["emergency_contact", "prefer_whatsapp_web"]:
+        if key not in config_data:
+            config_data[key] = default_config[key]
+            updated = True
+
+    if updated:
+        try:
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(config_data, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Could not update configuration file: {e}")
+
+    return config_data
+
+def prompt_update_emergency_contact(config: dict) -> dict:
+    """Ask the user at startup whether to update the emergency contact.
+
+    - If the user answers 'y', prompt for a new phone number and WhatsApp Web preference.
+    - Save updates to the user config path.
+    - Always returns the (possibly updated) config dict.
+    """
+    try:
+        # Show current value for context
+        current = (config or {}).get("emergency_contact", "").strip() or "<not set>"
+        ans = input(f"Would you like to update the emergency contact? (current: {current}) (y/n): ").strip().lower()
+        if ans == 'y':
+            new_phone = input("Enter new emergency contact number (e.g. +91 9876543210): ").strip()
+            if new_phone:
+                config["emergency_contact"] = new_phone
+            # Optional preference update
+            pref = input("Prefer WhatsApp Web for alerts? (y/n, Enter to skip): ").strip().lower()
+            if pref in ('y', 'n'):
+                config["prefer_whatsapp_web"] = (pref == 'y')
+            save_config(config)
+            print("✅ Emergency contact updated.\n")
+        else:
+            print("ℹ️ Keeping existing emergency contact.\n")
+    except Exception:
+        # If no stdin/console, skip prompting silently
+        pass
+    return config
+
+# Configuration will be loaded and managed by the main function
+# The prompt_phone_number_update() function handles user interaction
+
 
 class TrieNode:
     def __init__(self):
@@ -368,7 +530,7 @@ class AutoCompleteSystem:
             self.insert(word, root=self.csv_root)
         
         # Skip NLTK loading at startup for speed
-        # print(f"AutoComplete: Loaded {len(csv_word_list)} CSV words quickly!")
+        # print(f"AutoComplete: Loaded {len(csv_word_list)} CSV words from database")
         
         self.load_usage_data()
         # print("AutoComplete: Ready!")
@@ -453,21 +615,36 @@ class AutoCompleteSystem:
         word = word.strip().lower()
         if word and ' ' not in word and len(word) <= 20 and word.isalpha():
             self.frequency[word] += 1
-            with open("usage_data.txt", "a") as f:
-                f.write(f"{word},{int(time.time())}\n")
+            try:
+                with open(resource_path("usage_data.txt"), "a") as f:
+                    f.write(f"{word},{int(time.time())}\n")
+            except Exception as e:
+                # If we can't write to bundled resources, try current directory
+                try:
+                    with open("usage_data.txt", "a") as f:
+                        f.write(f"{word},{int(time.time())}\n")
+                except Exception:
+                    pass  # Silently fail if we can't save usage data
 
     def load_usage_data(self, filename="usage_data.txt"):
-        if not os.path.exists(filename):
-            return
-        with open(filename, "r") as f:
-            for line in f:
-                if "," in line:
-                    word, _ = line.strip().split(",", 1)  # Split only on first comma
-                    word = word.strip().lower()
-                    # Only load single words (no spaces, reasonable length, alphabetic)
-                    if word and ' ' not in word and len(word) <= 20 and word.isalpha():
-                        self.frequency[word] += 1
-                        self.insert(word, root=self.csv_root)
+        # Try bundled resource first, then current directory
+        usage_file_paths = [resource_path(filename), filename]
+        
+        for file_path in usage_file_paths:
+            if os.path.exists(file_path):
+                try:
+                    with open(file_path, "r") as f:
+                        for line in f:
+                            if "," in line:
+                                word, _ = line.strip().split(",", 1)  # Split only on first comma
+                                word = word.strip().lower()
+                                # Only load single words (no spaces, reasonable length, alphabetic)
+                                if word and ' ' not in word and len(word) <= 20 and word.isalpha():
+                                    self.frequency[word] += 1
+                                    self.insert(word, root=self.csv_root)
+                    break  # Successfully loaded, don't try other paths
+                except Exception:
+                    continue  # Try next path
 
 class EyeTracker:
     def __init__(self, auto):
@@ -478,7 +655,14 @@ class EyeTracker:
         global mp
         if mp is None:
             # print("EyeTracker: Importing MediaPipe...")
-            import mediapipe as mp_module
+            
+            # Import MediaPipe with comprehensive warning suppression
+            try:
+                with _suppress_all_warnings():
+                    import mediapipe as mp_module
+            except Exception:
+                # Fallback without suppression if needed
+                import mediapipe as mp_module
             mp = mp_module
         
         # print("EyeTracker: Setting up MediaPipe face mesh...")
@@ -486,12 +670,15 @@ class EyeTracker:
         
         # Create FaceMesh with fastest possible settings
         # print("EyeTracker: Creating optimized FaceMesh...")
-        self.face_mesh = self.mp_face_mesh.FaceMesh(
-            max_num_faces=1,
-            refine_landmarks=False,  # Disable for speed
-            min_detection_confidence=0.3,  # Lower threshold for speed  
-            min_tracking_confidence=0.3    # Lower threshold for speed
-        )
+        
+        # Create FaceMesh with comprehensive warning suppression
+        with _suppress_all_warnings():
+            self.face_mesh = self.mp_face_mesh.FaceMesh(
+                max_num_faces=1,
+                refine_landmarks=False,  # Disable for speed
+                min_detection_confidence=0.3,  # Lower threshold for speed  
+                min_tracking_confidence=0.3    # Lower threshold for speed
+            )
         
         # Initialize all other attributes quickly
         # print("EyeTracker: Setting up core systems...")
@@ -598,7 +785,48 @@ class EyeTracker:
         
         # Configuration
         self.config = load_config()
-        self.emergency_contact = DEFAULT_EMERGENCY_CONTACT.replace(" ", "")
+        # Ask at every run if user wants to update emergency contact
+        self.config = prompt_update_emergency_contact(self.config)
+        # Cache the (possibly updated) number without spaces for quick use
+        self.emergency_contact = self.config.get("emergency_contact", "").replace(" ", "")
+
+    def _start_phone_call(self, clean_number):
+        """Centralized phone dialing via tel: and Phone Link automation (pywinauto)."""
+        print("📞 Making emergency call...")
+        try:
+            os.system(f'start tel:{clean_number}')
+            print(f"📱 Dialing {clean_number}...")
+            time.sleep(5)
+
+            if PYWINAUTO_AVAILABLE:
+                print("🎯 Using pywinauto to trigger call button...")
+                try:
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", UserWarning)
+                        warnings.filterwarnings("ignore", message=".*SymbolDatabase.GetPrototype.*")
+                        app = Application(backend="uia").connect(path="PhoneExperienceHost.exe")
+
+                    win = app.top_window()
+                    win.set_focus()
+                    call_btn = win.child_window(auto_id="ButtonCall", control_type="Button")
+                    if call_btn.exists():
+                        call_btn.click_input()
+                        print("✅ Call button clicked successfully!")
+                        print("📞 Emergency call should be connecting...")
+                    else:
+                        print("⚠️ Call button not found.")
+                        raise Exception("Call button not found")
+                except Exception as pywin_error:
+                    print(f"⚠️ pywinauto method failed: {pywin_error}")
+                    print("📞 Manual call confirmation may be required!")
+            else:
+                print("📞 Phone dialer opened - pywinauto not available, MANUAL CALL REQUIRED!")
+
+            return True
+        except Exception as call_error:
+            print(f"❌ Phone call failed: {call_error}")
+            print(f"🚨 CRITICAL: MANUALLY DIAL {clean_number} NOW!")
+            return False
 
     def make_emergency_call(self, phone_number):
         """Initiate an emergency call and send WhatsApp message"""
@@ -622,10 +850,7 @@ class EyeTracker:
             else:
                 emergency_message = f"{base_message}\n\n📍 Location: Unable to determine current location"
                 print("⚠️ Could not get location - sending message without location info")
-            
-            # Also include the DEFAULT_EMERGENCY_MESSAGE
-            emergency_message += f"\n\n ⚠️⚠️EMERGENCY⚠️⚠️: {DEFAULT_EMERGENCY_MESSAGE}"
-            
+                        
             print("📲 Sending WhatsApp emergency message...")
             
             # Check if user prefers WhatsApp Web
@@ -634,12 +859,7 @@ class EyeTracker:
                 print("🌐 Configuration set to prefer WhatsApp Web - skipping app")
                 whatsapp_opened = False
             else:
-                # Properly encode the emergency message for URL
-                if URLLIB_AVAILABLE:
-                    encoded_message = urllib.parse.quote(emergency_message)
-                else:
-                    # Fallback encoding for special characters
-                    encoded_message = emergency_message.replace(' ', '%20').replace('!', '%21').replace('\n', '%0A').replace(':', '%3A').replace('?', '%3F').replace('&', '%26').replace('=', '%3D')
+                encoded_message = _encode_message_for_url(emergency_message)
                 
                 whatsapp_msg_url = f"whatsapp://send?phone={clean_number}&text={encoded_message}"
                 print(f"🔗 WhatsApp URL: {whatsapp_msg_url[:100]}..." if len(whatsapp_msg_url) > 100 else f"🔗 WhatsApp URL: {whatsapp_msg_url}")
@@ -926,9 +1146,7 @@ class EyeTracker:
                         # CHANGE 1 TEST
                         print("🔊 Preparing to speak emergency message...")
                         time.sleep(8)  # Adjust if needed
-                        self.speak(DEFAULT_EMERGENCY_MESSAGE)
                         
-                            
                     else:
                         # Fallback to simple pyautogui if Windows API not available
                         print("⌨️ Fallback: Using simple pyautogui method...")
@@ -975,15 +1193,7 @@ class EyeTracker:
                 self.is_system_active = True
                 print("✅ System restored to ACTIVE state after call error")
             
-            # Copy number to clipboard as last resort
-            if PYPERCLIP_AVAILABLE:
-                try:
-                    pyperclip.copy(f"EMERGENCY: CALL {clean_number}")
-                    print(f"📋 Emergency number copied to clipboard: {clean_number}")
-                except:
-                    print(f"📞 Manual dial required: {clean_number}")
-            else:
-                print(f"📞 Manual dial required: {clean_number}")
+            _fallback_copy_and_prompt(clean_number, label="EMERGENCY: CALL")
             
             return False
 
@@ -996,9 +1206,6 @@ class EyeTracker:
         print(f"📱 Formatted number: {clean_number}")
         
         try:
-            # Direct phone call using tel: protocol
-            print("📞 Making direct emergency phone call...")
-            
             # PAUSE OptiBlink keyboard monitoring during phone call
             # Save current system state to restore later
             self.was_active_before_phone_call = self.is_system_active
@@ -1006,108 +1213,9 @@ class EyeTracker:
             self.phone_call_start_time = time.time()
             self.keyboard_processing_enabled = False  # Completely disable keyboard processing
             print("🛑 OptiBlink keyboard monitoring COMPLETELY DISABLED for phone call")
-            
-            # Use generic tel: protocol (works with default phone handler)
-            print(f"📱 Dialing {clean_number} using system dialer...")
-            subprocess.run(['start', '', f'tel:{clean_number}'], shell=True, check=False)
-            
-            # Wait for dialer to load completely
-            print("⏳ Waiting for dialer to load...")
-            time.sleep(3)
-            # TTS says 'help' after callee attends the call
-            print("🔊 TTS: Saying 'help' after call is attended...")
-            self.speak("help")
-            
-            if PYAUTOGUI_AVAILABLE:
-                # Focus specifically on Phone Link and call immediately
-                print("🔄 Focusing on Phone Link window...")
-                if WIN32_AVAILABLE:
-                    try:
-                        # Find Phone Link window specifically
-                        def find_phone_link():
-                            def enum_callback(hwnd, windows):
-                                if win32gui.IsWindowVisible(hwnd):
-                                    title = win32gui.GetWindowText(hwnd).lower()
-                                    if ('phone' in title and 'link' in title) or 'your phone' in title:
-                                        windows.append((hwnd, win32gui.GetWindowText(hwnd)))
-                                return True
-                            
-                            windows = []
-                            win32gui.EnumWindows(enum_callback, windows)
-                            return windows[0] if windows else (0, "")
-                        
-                        phone_hwnd, phone_title = find_phone_link()
-                        if phone_hwnd != 0:
-                            print(f"📱 Found Phone Link: {phone_title}")
-                            
-                            # CRITICAL: Stop OptiBlink keyboard interference
-                            print("🛑 Temporarily stopping OptiBlink keyboard monitoring...")
-                            time.sleep(1)  # Brief pause for message to be seen
-                            
-                            # Focus Phone Link window properly WITHOUT aggressive window manipulation
-                            print("🎯 Focusing Phone Link gently...")
-                            win32gui.SetForegroundWindow(phone_hwnd)
-                            time.sleep(2)  # Wait for focus
-                            print("✅ Phone Link focused and ready!")
-                            
-                            # Use precise navigation to avoid screen casting button
-                            # SOLUTION: Use Tab navigation + Space key instead of direct Enter presses
-                            # OPTIMIZED: Single Tab + Space works on first try, no loops needed
-                            print("🎯 Navigating to call button (avoiding screen cast)...")
-                            
-                            # Navigate to call button - simple and effective
-                            pyautogui.hotkey('ctrl', 'home')  # Go to beginning
-                            time.sleep(0.5)
-                            
-                            # Single tab to call button
-                            print("� Navigating to call button...")
-                            pyautogui.press('tab')
-                            time.sleep(0.3)
-                            # Activate call button with Enter key (Space only dials, Enter calls)
-                            print("📞 Placing call...")
-                            pyautogui.press('enter')
-                            time.sleep(1)
-                            
-                            #CHANGE 2
-                            # Wait briefly before speaking
-                            print("🔊 Speaking emergency message...")
-                            time.sleep(15)  # Adjusted to 15 seconds based on user preference
-                            self.speak(DEFAULT_EMERGENCY_MESSAGE)
-                            print("🔄 OptiBlink keyboard monitoring will resume automatically")
-                            
-                            print("✅ Emergency call attempts completed!")
-                            
-                            # Final check - ensure Phone Link window remains visible
-                            try:
-                                print("🔍 Final window visibility check...")
-                                win32gui.ShowWindow(phone_hwnd, 5)  # SW_SHOW - ensure visible
-                                win32gui.SetForegroundWindow(phone_hwnd)
-                                print("✅ Phone Link window kept visible")
-                            except Exception as final_check_error:
-                                print(f"⚠️ Final visibility check failed: {final_check_error}")
-                            
-                        else:
-                            print("⚠️ Phone Link not found, call may need manual confirmation")
-                    except Exception as call_error:
-                        print(f"⚠️ Direct call automation failed: {call_error}")
-                        print("📞 Phone dialer opened - manual call confirmation may be required")
-                        # Re-enable keyboard processing on error
-                        self.phone_call_active = False
-                        self.keyboard_processing_enabled = True
-                        # Restore system to the state it was in before the phone call
-                        if hasattr(self, 'was_active_before_phone_call'):
-                            self.is_system_active = self.was_active_before_phone_call
-                            state = "ACTIVE" if self.is_system_active else "SLEEP"
-                            print(f"✅ System restored to {state} state after call error")
-                        else:
-                            # Fallback: assume user was active since they attempted a call
-                            self.is_system_active = True
-                            print("✅ System restored to ACTIVE state after call error")
-            else:
-                print("📞 Phone dialer opened - pyautogui not available, manual confirmation required")
-            
-            return True
-            
+            # Centralized dialing and Phone Link automation
+            call_ok = self._start_phone_call(clean_number)
+           
         except Exception as e:
             print(f"❌ Emergency call failed: {e}")
             # Re-enable keyboard processing on error
@@ -1123,15 +1231,7 @@ class EyeTracker:
                 self.is_system_active = True
                 print("✅ System restored to ACTIVE state after call error")
             
-            # Copy number to clipboard as fallback
-            if PYPERCLIP_AVAILABLE:
-                try:
-                    pyperclip.copy(f"EMERGENCY CALL: {clean_number}")
-                    print(f"📋 Emergency number copied to clipboard: {clean_number}")
-                except:
-                    print(f"📞 Manual dial required: {clean_number}")
-            else:
-                print(f"📞 Manual dial required: {clean_number}")
+            _fallback_copy_and_prompt(clean_number, label="EMERGENCY CALL:")
             
             return False
 
@@ -1142,8 +1242,8 @@ class EyeTracker:
             print("🚨 *** BYPASSING ALL SYSTEM RESTRICTIONS ***")
             
             # Clean phone number
-            clean_number = DEFAULT_EMERGENCY_CONTACT.replace(" ", "").replace("-", "")
-            print(f"📞 Emergency Contact: {clean_number}")
+            clean_number = self.emergency_contact.replace(" ", "").replace("-", "")
+            print(f"📞 Emergency Contact: {clean_number if clean_number else 'NOT SET'}")
             
             # Get current location
             print("🌍 Getting current location...")
@@ -1167,8 +1267,6 @@ class EyeTracker:
             else:
                 emergency_message = f"{base_message}\n\n📍 Location: Unable to determine current location"
                 print("⚠️ Could not get location - sending message without location info")
-            # Also use the DEFAULT_EMERGENCY_MESSAGE content
-            emergency_message += f"\n\n📝 Additional info: {DEFAULT_EMERGENCY_MESSAGE}"
             
             print(f"📝 Emergency message prepared: {len(emergency_message)} characters")
             
@@ -1245,12 +1343,7 @@ class EyeTracker:
                     print("🌐 Falling back to WhatsApp Web...")
                     web_number = clean_number.replace('+', '')
                     
-                    # Properly encode the emergency message for URL
-                    if URLLIB_AVAILABLE:
-                        encoded_message = urllib.parse.quote(emergency_message)
-                    else:
-                        # Fallback encoding for special characters
-                        encoded_message = emergency_message.replace(' ', '%20').replace('!', '%21').replace('\n', '%0A').replace(':', '%3A').replace('?', '%3F').replace('&', '%26').replace('=', '%3D')
+                    encoded_message = _encode_message_for_url(emergency_message)
                     
                     whatsapp_web_url = f"https://web.whatsapp.com/send?phone={web_number}&text={encoded_message}"
                     print(f"🌐 WhatsApp Web URL: {whatsapp_web_url[:100]}..." if len(whatsapp_web_url) > 100 else f"🌐 WhatsApp Web URL: {whatsapp_web_url}")
@@ -1268,53 +1361,8 @@ class EyeTracker:
                 except Exception as web_error:
                     print(f"⚠️ WhatsApp Web also failed: {web_error}")
             
-            # STEP 2: Make phone call - AVOID CAST SCREEN BUTTON
-            print("📞 Making emergency call...")
-            try:
-                # Use simple os.system like working test.py approach
-                os.system(f'start tel:{clean_number}')
-                print(f"📱 Dialing {clean_number}...")
-                
-                # Wait longer for Phone Link to load (5 seconds like working test)
-                time.sleep(5)
-                
-                # RELIABLE PHONE CALL using your working pywinauto method
-                if PYWINAUTO_AVAILABLE:
-                    print("🎯 Using tested working method to find call button...")
-                    try:
-                        # Suppress any remaining protobuf warnings during pywinauto usage
-                        with warnings.catch_warnings():
-                            warnings.simplefilter("ignore", UserWarning)
-                            warnings.filterwarnings("ignore", message=".*SymbolDatabase.GetPrototype.*")
-                            
-                            # Connect to Phone Link by process (exact same as your test.py)
-                            app = Application(backend="uia").connect(path="PhoneExperienceHost.exe")
-                        
-                        # Get the main window and focus it
-                        win = app.top_window()
-                        win.set_focus()
-                        
-                        # Find the Call button via AutomationId (exact same as your test.py)
-                        call_btn = win.child_window(auto_id="ButtonCall", control_type="Button")
-                        
-                        if call_btn.exists():
-                            call_btn.click_input()
-                            print("✅ Call button clicked successfully!")
-                            print("📞 Emergency call should be connecting...")
-                        else:
-                            print("⚠️ Call button not found.")
-                            raise Exception("Call button not found")
-                        
-                    except Exception as pywin_error:
-                        print(f"⚠️ pywinauto method failed: {pywin_error}")
-                        print("📞 Manual call confirmation may be required!")
-                            
-                else:
-                    print("📞 Phone dialer opened - pywinauto not available, MANUAL CALL REQUIRED!")
-                    
-            except Exception as call_error:
-                print(f"❌ Phone call failed: {call_error}")
-                print(f"🚨 CRITICAL: MANUALLY DIAL {clean_number} NOW!")
+            # STEP 2: Make phone call via centralized helper
+            call_ok = self._start_phone_call(clean_number)
                 
             # Always speak SOS message
             print("🔊 Speaking SOS message...")
@@ -1339,15 +1387,9 @@ class EyeTracker:
         
         except Exception as e:
             print(f"❌ CRITICAL: Emergency SOS failed: {e}")
-            print(f"📞 MANUAL ACTION REQUIRED: CALL {DEFAULT_EMERGENCY_CONTACT} IMMEDIATELY!")
+            print(f"📞 MANUAL ACTION REQUIRED: CALL {self.emergency_contact or 'YOUR EMERGENCY CONTACT'} IMMEDIATELY!")
             
-            # Copy number to clipboard as last resort
-            if PYPERCLIP_AVAILABLE:
-                try:
-                    pyperclip.copy(f"EMERGENCY CALL {clean_number}")
-                    print(f"📋 Emergency number copied to clipboard")
-                except:
-                    pass
+            _fallback_copy_and_prompt(clean_number, label="EMERGENCY CALL")
                     
             return False
 
@@ -1954,7 +1996,9 @@ class EyeTracker:
         
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         frame_height, frame_width = frame.shape[:2]
-        results = self.face_mesh.process(rgb_frame)
+        # Suppress all MediaPipe/TensorFlow warnings during processing
+        with _suppress_all_warnings():
+            results = self.face_mesh.process(rgb_frame)
 
         line_spacing = 35
         current_y = 30
@@ -2143,9 +2187,79 @@ class EyeTracker:
 
         return frame
 
+def prompt_phone_number_update():
+    """Prompt user to update their emergency phone number on every application run"""
+    try:
+        # Load current config
+        config = load_config()
+        current_phone = config.get('emergency_contact', '')
+        
+        print("\n📞 EMERGENCY CONTACT VERIFICATION")
+        print("=" * 40)
+        
+        if current_phone:
+            print(f"Current emergency contact: {current_phone}")
+            print("\nThis number will be called automatically if you use the SOS signal (6 dots: ......)")
+            update_choice = input("\nDo you want to update your emergency contact number? (y/n): ").strip().lower()
+            
+            if update_choice == 'y' or update_choice == 'yes':
+                new_phone = input("\nEnter new emergency contact number (with country code, e.g., +919876543210): ").strip()
+                
+                if new_phone and len(new_phone) >= 10:
+                    # Simple validation - ensure it starts with + and has numbers
+                    if new_phone.startswith('+') and any(c.isdigit() for c in new_phone):
+                        config['emergency_contact'] = new_phone
+                        save_config(config)
+                        print(f"✅ Emergency contact updated to: {new_phone}")
+                    else:
+                        print("⚠️ Invalid phone number format. Please use format: +[country code][number]")
+                        print(f"Keeping current number: {current_phone}")
+                else:
+                    print("⚠️ Invalid phone number. Keeping current number.")
+            else:
+                print(f"Keeping current emergency contact: {current_phone}")
+        else:
+            print("⚠️ No emergency contact found!")
+            new_phone = input("Enter emergency contact number (with country code, e.g., +919876543210): ").strip()
+            
+            if new_phone and len(new_phone) >= 10:
+                if new_phone.startswith('+') and any(c.isdigit() for c in new_phone):
+                    config['emergency_contact'] = new_phone
+                    save_config(config)
+                    print(f"✅ Emergency contact set to: {new_phone}")
+                else:
+                    print("⚠️ Invalid phone number format. Using default.")
+                    config['emergency_contact'] = DEFAULT_EMERGENCY_CONTACT
+                    save_config(config)
+            else:
+                print("⚠️ Invalid phone number. Using default.")
+                config['emergency_contact'] = DEFAULT_EMERGENCY_CONTACT
+                save_config(config)
+        
+        # Also prompt for WhatsApp preference
+        whatsapp_choice = input("\nDo you want to send WhatsApp message before calling? (y/n): ").strip().lower()
+        config['prefer_whatsapp_web'] = (whatsapp_choice == 'y' or whatsapp_choice == 'yes')
+        save_config(config)
+        
+        whatsapp_status = "enabled" if config['prefer_whatsapp_web'] else "disabled"
+        print(f"WhatsApp Web integration: {whatsapp_status}")
+        
+        print("\n" + "=" * 40)
+        print("Emergency contact verification complete!\n")
+        
+        return config
+        
+    except Exception as e:
+        print(f"Error during phone number update: {e}")
+        return load_config()  # Return current config if error
+
+
 def main():
     print("🚀 OptiBlink - Eye Tracking Morse Code Interface")
     print("=" * 50)
+    
+    # Prompt for emergency contact update on every run
+    updated_config = prompt_phone_number_update()
     
     # Initialize camera first for immediate feedback
     print("📹 Initializing camera...")
@@ -2158,20 +2272,19 @@ def main():
     # Initialize systems with comprehensive stderr suppression
     print("🧠 Loading AI models and systems...")
     
-    # Comprehensive stderr suppression for TensorFlow/MediaPipe warnings
-    import os
-    devnull = open(os.devnull, 'w')
-    old_stderr = sys.stderr
-    
+    # Restore boot-time suppressed native stderr now that we're ready
     try:
-        # Redirect stderr to devnull during initialization
-        sys.stderr = devnull
+        if '_BOOT_SAVED_FD' in globals() and _BOOT_SAVED_FD is not None:
+            os.dup2(_BOOT_SAVED_FD, 2)
+            os.close(_BOOT_SAVED_FD)
+            _BOOT_SAVED_FD = None
+    except Exception:
+        pass
+
+    # Comprehensive native stderr suppression for TF/MediaPipe warnings
+    with _suppress_native_stderr():
         auto = AutoCompleteSystem()
         eye_tracker = EyeTracker(auto)
-    finally:
-        # Always restore stderr
-        sys.stderr = old_stderr
-        devnull.close()
     
     print("✅ OptiBlink ready!")
     print("👁️  Look at the camera and blink to start calibration")
