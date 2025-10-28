@@ -1,27 +1,97 @@
 # Standard library imports
 import sys
+import os
+
+_BOOT_SAVED_FD = None
+try:
+    _BOOT_SAVED_FD = os.dup(2)  # stderr only
+    nul_path = 'NUL' if os.name == 'nt' else '/dev/null'
+    nul_fd = os.open(nul_path, os.O_WRONLY)
+    os.dup2(nul_fd, 2)  # Redirect stderr only
+    os.close(nul_fd)
+except Exception:
+    pass
+
+# LEVEL 2: Set ALL possible TensorFlow/ABSL/GLOG environment variables
+# These need to be set BEFORE any TensorFlow/MediaPipe imports
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # TensorFlow C++ logging
+os.environ['TF_CPP_MIN_VLOG_LEVEL'] = '0'  # TensorFlow verbose logging
+os.environ['TF_CPP_MAX_VLOG_LEVEL'] = '0'  # Maximum verbose level
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN messages
+
+# ABSL (Abseil) logging - Google's C++ logging library
+os.environ['ABSL_MIN_LOG_LEVEL'] = '3'  # Minimum log level
+os.environ['ABSL_LOGGING_MIN_LOG_LEVEL'] = '3'  # Alternative name
+
+# Google logging (GLOG)
+os.environ['GLOG_minloglevel'] = '3'  # Minimum severity level
+os.environ['GLOG_logtostderr'] = '0'  # Don't log to stderr
+os.environ['GLOG_stderrthreshold'] = '3'  # Stderr threshold
+os.environ['GLOG_v'] = '0'  # Verbosity level
+
+# TensorFlow Lite specific
+os.environ['TFLITE_LOG_LEVEL'] = '3'  # TFLite log level
+os.environ['TFLITE_SUPPRESS_LOG'] = '1'  # Suppress TFLite logs
+os.environ['XNNPACK_VERBOSE'] = '0'  # XNNPACK delegate verbosity
+
+# MediaPipe
+os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'  # Disable GPU warnings
+
+# TensorFlow module specific
+os.environ['TF_CPP_VMODULE'] = 'inference_feedback_manager=0,xnnpack_delegate=0,external_delegate_adaptor=0'
+
+# General TensorFlow flags
+os.environ['TF_DETERMINISTIC_OPS'] = '1'  # Can reduce some warnings
+os.environ['AUTOGRAPH_VERBOSITY'] = '0'  # AutoGraph verbosity
 
 if sys.stdout:
     sys.stdout.reconfigure(encoding='utf-8')
-if sys.stderr:
-    sys.stderr.reconfigure(encoding='utf-8')
+# DO NOT reconfigure stderr yet - keep it suppressed!
+
+# LEVEL 4: Additional environment variables for completeness
+os.environ['PYTHONWARNINGS'] = 'ignore'  # Ignore all Python warnings
+os.environ['PYTHONIOENCODING'] = 'utf-8'  # IO encoding
 
 # Environment variable suppression for protobuf warnings (must be before imports)
-import os
 os.environ['PYTHONWARNINGS'] = 'ignore::UserWarning:google.protobuf.symbol_database'
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TensorFlow warnings too
-# Align other logging env vars early
-os.environ['ABSL_LOGGING_MIN_LOG_LEVEL'] = '3'
-os.environ['GLOG_minloglevel'] = '3'
+os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
+
+# Additional suppression
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'  # PyGame
+os.environ['KMP_WARNINGS'] = '0'  # Intel MKL warnings
+os.environ['OMP_NUM_THREADS'] = '1'  # OpenMP warnings
 
 
-# Comprehensive warning suppression for cleaner startup (must be before other imports)
+# LEVEL 5: Comprehensive warning suppression for cleaner startup (must be before other imports)
 import warnings
-warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
+warnings.filterwarnings("ignore")  # Ignore ALL warnings
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning)
+warnings.filterwarnings("ignore", category=ImportWarning)
+warnings.filterwarnings("ignore", category=RuntimeWarning)
 
-# Additional specific protobuf warning suppression
+# LEVEL 6: Python logging configuration - set EVERYTHING to CRITICAL
 import logging
-logging.getLogger('google.protobuf.symbol_database').setLevel(logging.ERROR)
+logging.basicConfig(
+    level=logging.CRITICAL,
+    format='',
+    handlers=[logging.NullHandler()]
+)
+
+# Disable ALL known loggers
+for logger_name in [
+    'tensorflow', 'absl', 'mediapipe', 'google.protobuf',
+    'google.protobuf.symbol_database', 'root', 'py.warnings'
+]:
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.CRITICAL)
+    logger.disabled = True
+    logger.propagate = False
+
+# Disable root logger completely
+logging.disable(logging.CRITICAL)
 
 import csv
 import ctypes
@@ -94,23 +164,46 @@ def _fallback_copy_and_prompt(clean_number, label="EMERGENCY CALL"):
 
 # Native (C-level) stderr redirection to swallow absl/TFLite C++ logs
 import contextlib
+import io
 
 @contextlib.contextmanager
 def _suppress_native_stderr():
-    """Suppress C++ level stderr output from TensorFlow/MediaPipe libraries"""
+    """ULTRA-AGGRESSIVE: Suppress C++ level stderr output from TensorFlow/MediaPipe libraries
+    
+    This function creates a complete blackhole for stderr at the OS file descriptor level.
+    Nothing that writes to stderr (including C++ code) can escape this suppression.
+    """
     saved_fd = None
     nul_fd = None
     try:
+        # Save current stderr file descriptor
         saved_fd = os.dup(2)
+        
+        # Open the system's null device
         nul_path = 'NUL' if os.name == 'nt' else '/dev/null'
         nul_fd = os.open(nul_path, os.O_WRONLY)
+        
+        # Replace stderr (fd 2) with null device
         os.dup2(nul_fd, 2)
         os.close(nul_fd)
         nul_fd = None
+        
+        # Flush any buffered content before yielding
+        try:
+            sys.stderr.flush()
+        except:
+            pass
+            
         yield
     finally:
         try:
+            # Restore original stderr file descriptor
             if saved_fd is not None:
+                # Flush before restoring
+                try:
+                    sys.stderr.flush()
+                except:
+                    pass
                 os.dup2(saved_fd, 2)
                 os.close(saved_fd)
         except Exception:
@@ -118,39 +211,48 @@ def _suppress_native_stderr():
 
 @contextlib.contextmanager
 def _suppress_all_warnings():
-    """Comprehensive warning suppression for MediaPipe/TensorFlow operations"""
-    # Save original stderr
-    original_stderr = sys.stderr
+    """NUCLEAR OPTION: Comprehensive multi-layer warning suppression
     
-    # Save original logging levels
+    This combines Python-level and logging-level suppression.
+    NOTE: Does NOT nest _suppress_native_stderr() to avoid conflicts with boot-time suppression.
+    """
+    # Save original stderr and logging state
+    original_stderr = sys.stderr
     original_levels = {}
-    loggers_to_silence = ['tensorflow', 'absl', 'mediapipe', 'google.protobuf']
+    
+    # ALL possible loggers that could emit warnings
+    loggers_to_silence = [
+        'tensorflow', 'absl', 'mediapipe', 'google.protobuf',
+        'google.protobuf.symbol_database', 'google.protobuf.text_format',
+        'root', 'py.warnings', 'asyncio'
+    ]
     
     for logger_name in loggers_to_silence:
         logger = logging.getLogger(logger_name)
         original_levels[logger_name] = logger.level
-        logger.setLevel(logging.ERROR)
+        logger.setLevel(logging.CRITICAL)
+        logger.disabled = True
     
     try:
-        # Redirect stderr to devnull during critical operations
-        import io
+        # Redirect Python's stderr to a black hole StringIO
         devnull = io.StringIO()
         sys.stderr = devnull
         
-        # Also suppress at the file descriptor level
-        with warnings.catch_warnings(), _suppress_native_stderr():
+        # Suppress at warnings module level
+        with warnings.catch_warnings():
             warnings.simplefilter("ignore")
-            warnings.filterwarnings('ignore', message='.*XNNPACK.*')
-            warnings.filterwarnings('ignore', message='.*inference_feedback_manager.*')
-            warnings.filterwarnings('ignore', message='.*TensorFlow Lite.*')
-            warnings.filterwarnings('ignore', message='.*Created TensorFlow Lite.*')
+            warnings.filterwarnings('ignore')
             yield
+                
     finally:
         # Restore original stderr
         sys.stderr = original_stderr
+        
         # Restore original logging levels
         for logger_name, original_level in original_levels.items():
-            logging.getLogger(logger_name).setLevel(original_level)
+            logger = logging.getLogger(logger_name)
+            logger.setLevel(original_level)
+            logger.disabled = False
 
 
 # Location services imports
@@ -191,6 +293,10 @@ os.environ['MEDIAPIPE_DISABLE_GPU'] = '1'  # Disable GPU warnings if needed
 # Suppress protobuf warnings specifically
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
 
+# Additional TFLite and XNNPACK delegate warning suppression
+os.environ['XNNPACK_VERBOSE'] = '0'
+os.environ['TFLITE_SUPPRESS_LOG'] = '1'
+
 
 # Core imports that are always needed
 import cv2
@@ -206,6 +312,7 @@ gTTS = None  # Will be imported when TTS is first used
 try:
     import win32gui
     import win32con
+    import win32api
     WIN32_AVAILABLE = True
 except ImportError:
     WIN32_AVAILABLE = False
@@ -396,25 +503,34 @@ def load_words_from_csv(csv_path, column_name="Word"):
         if not os.path.exists(csv_path):
             print(f"CSV file not found: {csv_path}. Will use NLTK if needed.")
             return words
-            
-        # Suppress loading message for cleaner startup
-        # print(f"Loading words from {csv_path}...")
+        
+        # Simple direct approach - read as CSV with two columns
         with open(csv_path, newline='', encoding='utf-8') as csvfile:
-            reader = csv.DictReader(csvfile)
-            # Only load first 3000 words for faster startup
+            reader = csv.reader(csvfile)
+            next(reader, None)  # Skip header row
             count = 0
             for row in reader:
                 if count >= 3000:  # Limit for faster startup
                     break
-                word = row.get(column_name)
-                if word and word.isalpha() and len(word) > 2:
-                    words.append(word.lower())
+                if len(row) >= 2:  # Ensure there's at least a letter and word
+                    word = row[1]  # Second column contains the word
+                    if word and word.isalpha() and len(word) > 2:
+                        words.append(word.lower())
                 count += 1
-        # Suppress word count message for cleaner startup
-        # print(f"Loaded {len(words)} words from CSV")
+                
+        # Add some default words if none were loaded
+        if not words:
+            default_words = ["the", "and", "for", "you", "that", "have", "with", "this", "from", "they", 
+                            "will", "would", "there", "their", "what", "about", "which", "when", "make", 
+                            "like", "time", "just", "know", "take", "people", "into", "year", "your", "good"]
+            words = default_words
+            
+        print(f"Loaded {len(words)} words for suggestions")
     except Exception as e:
-        # print(f"CSV loading error: {e}. Will use NLTK fallback if needed.")
-        pass
+        print(f"CSV loading error: {e}. Using default words.")
+        # Add default words as fallback
+        default_words = ["the", "and", "for", "you", "that", "have", "with", "this", "from", "they"]
+        words = default_words
     return words
 
 # Load CSV words quickly - no NLTK loading at startup for speed
@@ -440,13 +556,38 @@ def load_or_create_config():
     if not os.path.exists(CONFIG_PATH):
         print("🔧 No configuration found. Let's set it up!")
 
+        # Detect if running in an interactive console
+        interactive = False
         try:
-            phone = input("Enter your emergency contact number (e.g. +91 9876543210): ").strip()
-            use_whatsapp = input("Prefer WhatsApp Web for alerts? (y/n): ").strip().lower() == "y"
+            interactive = bool(sys.stdin and sys.stdin.isatty())
         except Exception:
-            # If stdin is not available (e.g., no console), keep defaults
-            phone = ""
-            use_whatsapp = False
+            interactive = False
+
+        phone = ""
+        use_whatsapp = False
+
+        if interactive:
+            try:
+                phone = input("Enter your emergency contact number (e.g. +91 9876543210): ").strip()
+                use_whatsapp = input("Prefer WhatsApp Web for alerts? (y/n): ").strip().lower() == "y"
+            except Exception:
+                phone = ""
+                use_whatsapp = False
+        else:
+            # Try to prompt the user with a simple GUI dialog when no stdin is available
+            try:
+                import tkinter as _tk
+                from tkinter import simpledialog as _sd, messagebox as _mb
+                root = _tk.Tk()
+                root.withdraw()
+                new_phone = _sd.askstring("Emergency Contact", "Enter emergency contact number (with country code, e.g., +919876543210):", parent=root)
+                if new_phone and len(new_phone.strip()) >= 10:
+                    phone = new_phone.strip()
+                use_whatsapp = _mb.askyesno("WhatsApp Preference", "Prefer WhatsApp Web for alerts?", parent=root)
+                root.destroy()
+            except Exception:
+                phone = ""
+                use_whatsapp = False
 
         default_config["emergency_contact"] = phone
         default_config["prefer_whatsapp_web"] = use_whatsapp
@@ -488,23 +629,58 @@ def prompt_update_emergency_contact(config: dict) -> dict:
     - Always returns the (possibly updated) config dict.
     """
     try:
+        # Detect interactive console
+        interactive = False
+        try:
+            interactive = bool(sys.stdin and sys.stdin.isatty())
+        except Exception:
+            interactive = False
+
         # Show current value for context
         current = (config or {}).get("emergency_contact", "").strip() or "<not set>"
-        ans = input(f"Would you like to update the emergency contact? (current: {current}) (y/n): ").strip().lower()
-        if ans == 'y':
-            new_phone = input("Enter new emergency contact number (e.g. +91 9876543210): ").strip()
-            if new_phone:
-                config["emergency_contact"] = new_phone
-            # Optional preference update
-            pref = input("Prefer WhatsApp Web for alerts? (y/n, Enter to skip): ").strip().lower()
-            if pref in ('y', 'n'):
-                config["prefer_whatsapp_web"] = (pref == 'y')
-            save_config(config)
-            print("✅ Emergency contact updated.\n")
+
+        if interactive:
+            try:
+                ans = input(f"Would you like to update the emergency contact? (current: {current}) (y/n): ").strip().lower()
+                if ans == 'y':
+                    new_phone = input("Enter new emergency contact number (e.g. +91 9876543210): ").strip()
+                    if new_phone:
+                        config["emergency_contact"] = new_phone
+                    # Optional preference update
+                    pref = input("Prefer WhatsApp Web for alerts? (y/n, Enter to skip): ").strip().lower()
+                    if pref in ('y', 'n'):
+                        config["prefer_whatsapp_web"] = (pref == 'y')
+                    save_config(config)
+                    print("✅ Emergency contact updated.\n")
+                else:
+                    print("ℹ️ Keeping existing emergency contact.\n")
+            except Exception:
+                # If stdin fails mid-prompt, just return existing config
+                pass
         else:
-            print("ℹ️ Keeping existing emergency contact.\n")
+            # Non-interactive: try GUI dialogs; if unavailable, skip prompting
+            try:
+                import tkinter as _tk
+                from tkinter import simpledialog as _sd, messagebox as _mb
+                root = _tk.Tk()
+                root.withdraw()
+                update = _mb.askyesno("Update Emergency Contact", f"Current: {current}\n\nDo you want to update the emergency contact?", parent=root)
+                if update:
+                    new_phone = _sd.askstring("Update Emergency Contact", "Enter new emergency contact number (e.g. +91 9876543210):", parent=root)
+                    if new_phone:
+                        config["emergency_contact"] = new_phone.strip()
+                    pref = _mb.askyesno("WhatsApp Preference", "Prefer WhatsApp Web for alerts?", parent=root)
+                    config["prefer_whatsapp_web"] = pref
+                    save_config(config)
+                    print("✅ Emergency contact updated via GUI.\n")
+                else:
+                    print("ℹ️ Keeping existing emergency contact.\n")
+                root.destroy()
+            except Exception:
+                # No GUI available either - skip prompting silently
+                pass
     except Exception:
-        # If no stdin/console, skip prompting silently
+        # If prompting fails for any reason, just continue with existing config
         pass
     return config
 
@@ -608,6 +784,45 @@ class AutoCompleteSystem:
             extra = [w for w in nltk_results if w not in results]
             extra.sort(key=lambda x: (-self.frequency[x], x))
             results += extra[:3-len(results)]
+            
+        # If still no results, provide fallback suggestions based on first letter
+        if not results and prefix:
+            first_letter = prefix[0].lower()
+            fallback_suggestions = {
+                'a': ['and', 'all', 'about'],
+                'b': ['but', 'because', 'before'],
+                'c': ['can', 'come', 'could'],
+                'd': ['do', 'day', 'down'],
+                'e': ['even', 'every', 'ever'],
+                'f': ['for', 'from', 'find'],
+                'g': ['get', 'good', 'give'],
+                'h': ['have', 'how', 'here'],
+                'i': ['in', 'it', 'if'],
+                'j': ['just', 'job', 'join'],
+                'k': ['know', 'keep', 'key'],
+                'l': ['like', 'look', 'life'],
+                'm': ['make', 'more', 'most'],
+                'n': ['not', 'new', 'now'],
+                'o': ['one', 'other', 'out'],
+                'p': ['people', 'part', 'place'],
+                'q': ['question', 'quick', 'quite'],
+                'r': ['right', 'really', 'run'],
+                's': ['say', 'see', 'some'],
+                't': ['the', 'that', 'time'],
+                'u': ['up', 'use', 'us'],
+                'v': ['very', 'view', 'value'],
+                'w': ['with', 'would', 'when'],
+                'x': ['x-ray', 'xmas', 'xenon'],
+                'y': ['you', 'year', 'yes'],
+                'z': ['zero', 'zone', 'zoom']
+            }
+            if first_letter in fallback_suggestions:
+                results = [word for word in fallback_suggestions[first_letter] if word.startswith(prefix)]
+            
+            # If still no results, just return some common words
+            if not results:
+                results = ['the', 'and', 'for'][:3]
+                
         return results[:3]
 
     def record_usage(self, word):
@@ -671,14 +886,15 @@ class EyeTracker:
         # Create FaceMesh with fastest possible settings
         # print("EyeTracker: Creating optimized FaceMesh...")
         
-        # Create FaceMesh with comprehensive warning suppression
-        with _suppress_all_warnings():
-            self.face_mesh = self.mp_face_mesh.FaceMesh(
-                max_num_faces=1,
-                refine_landmarks=False,  # Disable for speed
-                min_detection_confidence=0.3,  # Lower threshold for speed  
-                min_tracking_confidence=0.3    # Lower threshold for speed
-            )
+        # Create FaceMesh with comprehensive warning suppression (both Python and C++ level)
+        with _suppress_native_stderr():
+            with _suppress_all_warnings():
+                self.face_mesh = self.mp_face_mesh.FaceMesh(
+                    max_num_faces=1,
+                    refine_landmarks=False,  # Disable for speed
+                    min_detection_confidence=0.3,  # Lower threshold for speed  
+                    min_tracking_confidence=0.3    # Lower threshold for speed
+                )
         
         # Initialize all other attributes quickly
         # print("EyeTracker: Setting up core systems...")
@@ -785,10 +1001,12 @@ class EyeTracker:
         
         # Configuration
         self.config = load_config()
-        # Ask at every run if user wants to update emergency contact
-        self.config = prompt_update_emergency_contact(self.config)
-        # Cache the (possibly updated) number without spaces for quick use
+        # Cache the emergency contact number without spaces for quick use
         self.emergency_contact = self.config.get("emergency_contact", "").replace(" ", "")
+        
+        # Call icon hover state
+        self._icon_hovering = False
+        self._icon_bbox_attr = None
 
     def _start_phone_call(self, clean_number):
         """Centralized phone dialing via tel: and Phone Link automation (pywinauto)."""
@@ -1425,7 +1643,7 @@ class EyeTracker:
         return self.set_window_transparency(window_name, 1.0)
 
     def draw_keyboard(self, width, height):
-        """Draw a dynamic keyboard using OpenCV"""
+        """Draw a dynamic keyboard using OpenCV."""
         keyboard_img = np.zeros((height, width, 3), dtype=np.uint8)
         keyboard_img[:] = (40, 40, 40)  # Dark gray background
         
@@ -1582,6 +1800,7 @@ class EyeTracker:
                 for attempt in range(max_attempts):
                     (text_w, text_h), _ = cv2.getTextSize(display_text, font, font_scale, text_thickness)
                     if text_w <= key_width - 8:  # 4px padding on each side
+                       
                         break
                     font_scale *= 0.9  # Reduce font size by 10%
                     if font_scale < 0.25:  # Minimum readable size
@@ -1675,6 +1894,109 @@ class EyeTracker:
             return ear, area, points
         except Exception:
             return 0.0, 0.0, None
+    
+    def draw_call_icon(self, frame):
+        """Draw call icon at the middle right extreme of the video frame. Returns icon_bbox (x, y, w, h) or None."""
+        icon_bbox = None
+        try:
+            # Candidate locations for the icon file (project root or assets folder)
+            icon_candidates = [
+                resource_path(os.path.join('assets', 'call_icon.png')), 
+                resource_path('call_icon.png'),
+                os.path.join(os.path.dirname(__file__), 'call_icon.png')
+            ]
+            icon_path = None
+            for c in icon_candidates:
+                try:
+                    if c and os.path.exists(c):
+                        icon_path = c
+                        break
+                except Exception:
+                    continue
+
+            if icon_path:
+                icon = cv2.imread(icon_path, cv2.IMREAD_UNCHANGED)
+                if icon is not None:
+                    frame_h, frame_w = frame.shape[:2]
+                    
+                    # Icon size - make it reasonably sized
+                    max_icon_dim = 50  # 50px icon size
+                    ih, iw = icon.shape[:2]
+                    scale = min(max_icon_dim / ih, max_icon_dim / iw, 1.0)
+                    new_w = max(32, int(iw * scale))
+                    new_h = max(32, int(ih * scale))
+                    icon_resized = cv2.resize(icon, (new_w, new_h), interpolation=cv2.INTER_AREA)
+
+                    # Position: just above the keyboard, right side
+                    # Right extreme: 10px from right edge
+                    # Bottom: just above the keyboard (10px from bottom of video area)
+                    icon_x = frame_w - new_w - 10
+                    icon_y = frame_h - new_h - 10  # 10px margin from bottom of video area
+
+                    # Ensure coordinates inside frame
+                    if icon_y >= 0 and icon_x >= 0 and icon_x + new_w <= frame_w and icon_y + new_h <= frame_h:
+                        # Draw a circular background to make it more prominent and clickable
+                        padding = 8
+                        circle_center = (icon_x + new_w // 2, icon_y + new_h // 2)
+                        circle_radius = (max(new_w, new_h) // 2) + padding
+                        
+                        # Check if mouse is hovering (if attribute exists)
+                        is_hovering = getattr(self, '_icon_hovering', False)
+                        
+                        # Draw circle background with hover effect
+                        if is_hovering:
+                            # Bright green background when hovering
+                            cv2.circle(frame, circle_center, circle_radius, (255, 255, 255), 2)
+                        else:
+                            # Semi-transparent white background normally
+                            overlay = frame.copy()
+                            cv2.circle(overlay, circle_center, circle_radius, (255, 255, 255), -1)
+                            cv2.addWeighted(overlay, 0.3, frame, 0.7, 0, frame)
+                            cv2.circle(frame, circle_center, circle_radius, (200, 200, 200), 2)
+                        
+                        # If icon has alpha channel, blend using alpha; otherwise simple paste
+                        if icon_resized.shape[2] == 4:
+                            alpha = icon_resized[:, :, 3] / 255.0
+                            for c in range(3):
+                                frame[icon_y:icon_y+new_h, icon_x:icon_x+new_w, c] = (
+                                    alpha * icon_resized[:, :, c] + (1 - alpha) * frame[icon_y:icon_y+new_h, icon_x:icon_x+new_w, c]
+                                ).astype(np.uint8)
+                        else:
+                            frame[icon_y:icon_y+new_h, icon_x:icon_x+new_w] = icon_resized[:, :, :3]
+                        
+                        # Add tooltip text when hovering
+                        if is_hovering:
+                            tooltip_text = "Update Emergency Contact"
+                            font = cv2.FONT_HERSHEY_SIMPLEX
+                            font_scale = 0.5
+                            thickness = 2
+                            (text_width, text_height), _ = cv2.getTextSize(tooltip_text, font, font_scale, thickness)
+                            
+                            # Position tooltip to the left of icon
+                            tooltip_x = icon_x - text_width - 15
+                            tooltip_y = icon_y + new_h // 2 + text_height // 2
+                            
+                            # Draw tooltip background
+                            padding = 5
+                            cv2.rectangle(frame, 
+                                        (tooltip_x - padding, tooltip_y - text_height - padding),
+                                        (tooltip_x + text_width + padding, tooltip_y + padding),
+                                        (0, 0, 0), -1)
+                            cv2.rectangle(frame, 
+                                        (tooltip_x - padding, tooltip_y - text_height - padding),
+                                        (tooltip_x + text_width + padding, tooltip_y + padding),
+                                        (255, 255, 255), 1)
+                            
+                            # Draw tooltip text
+                            cv2.putText(frame, tooltip_text, (tooltip_x, tooltip_y), 
+                                      font, font_scale, (255, 255, 255), thickness)
+                        
+                        icon_bbox = (icon_x, icon_y, new_w, new_h)
+        except Exception as e:
+            # Don't fail the entire frame drawing if icon overlay fails
+            pass
+        
+        return icon_bbox
 
     def detect_blink(self, left_ear, right_ear, left_area, right_area):
         avg_ear = (left_ear + right_ear) / 2.0
@@ -2169,7 +2491,7 @@ class EyeTracker:
                     box_y += box_height + padding
                 box_top_left = (box_x, box_y)
                 box_bottom_right = (box_x + box_width, box_y + box_height)
-                cv2.rectangle(frame, box_top_left, box_bottom_right, (255, 0, 0), 2)
+                cv2.rectangle(frame, box_top_left, box_bottom_right, (255, 255, 255), 2)
 
                 text_x = box_x + 10
                 text_y = box_y + 20
@@ -2185,6 +2507,11 @@ class EyeTracker:
         else:
             cv2.circle(frame, (frame_width - 50, 50), 10, (0, 255, 0), -1)
 
+        # Add call icon to the middle right extreme of the video frame
+        icon_bbox = self.draw_call_icon(frame)
+        # Store icon bbox for mouse callback (in video frame coordinates)
+        self._icon_bbox_attr = icon_bbox
+        
         return frame
 
 def prompt_phone_number_update():
@@ -2193,62 +2520,91 @@ def prompt_phone_number_update():
         # Load current config
         config = load_config()
         current_phone = config.get('emergency_contact', '')
-        
+
         print("\n📞 EMERGENCY CONTACT VERIFICATION")
         print("=" * 40)
-        
-        if current_phone:
-            print(f"Current emergency contact: {current_phone}")
-            print("\nThis number will be called automatically if you use the SOS signal (6 dots: ......)")
-            update_choice = input("\nDo you want to update your emergency contact number? (y/n): ").strip().lower()
-            
-            if update_choice == 'y' or update_choice == 'yes':
-                new_phone = input("\nEnter new emergency contact number (with country code, e.g., +919876543210): ").strip()
-                
-                if new_phone and len(new_phone) >= 10:
-                    # Simple validation - ensure it starts with + and has numbers
-                    if new_phone.startswith('+') and any(c.isdigit() for c in new_phone):
+
+        # Detect interactive console
+        interactive = False
+        try:
+            interactive = bool(sys.stdin and sys.stdin.isatty())
+        except Exception:
+            interactive = False
+
+        if interactive:
+            # Console-based prompts
+            try:
+                if current_phone:
+                    print(f"Current emergency contact: {current_phone}")
+                    print("\nThis number will be called automatically if you use the SOS signal (6 dots: ......)")
+                    update_choice = input("\nDo you want to update your emergency contact number? (y/n): ").strip().lower()
+                    if update_choice in ('y', 'yes'):
+                        new_phone = input("\nEnter new emergency contact number (with country code, e.g., +919876543210): ").strip()
+                        if new_phone and len(new_phone) >= 10 and new_phone.startswith('+') and any(c.isdigit() for c in new_phone):
+                            config['emergency_contact'] = new_phone
+                            save_config(config)
+                            print(f"✅ Emergency contact updated to: {new_phone}")
+                        else:
+                            print("⚠️ Invalid phone number. Keeping current number.")
+                    else:
+                        print(f"Keeping current emergency contact: {current_phone}")
+                else:
+                    print("⚠️ No emergency contact found!")
+                    new_phone = input("Enter emergency contact number (with country code, e.g., +919876543210): ").strip()
+                    if new_phone and len(new_phone) >= 10 and new_phone.startswith('+') and any(c.isdigit() for c in new_phone):
                         config['emergency_contact'] = new_phone
                         save_config(config)
-                        print(f"✅ Emergency contact updated to: {new_phone}")
+                        print(f"✅ Emergency contact set to: {new_phone}")
                     else:
-                        print("⚠️ Invalid phone number format. Please use format: +[country code][number]")
-                        print(f"Keeping current number: {current_phone}")
-                else:
-                    print("⚠️ Invalid phone number. Keeping current number.")
-            else:
-                print(f"Keeping current emergency contact: {current_phone}")
-        else:
-            print("⚠️ No emergency contact found!")
-            new_phone = input("Enter emergency contact number (with country code, e.g., +919876543210): ").strip()
-            
-            if new_phone and len(new_phone) >= 10:
-                if new_phone.startswith('+') and any(c.isdigit() for c in new_phone):
-                    config['emergency_contact'] = new_phone
-                    save_config(config)
-                    print(f"✅ Emergency contact set to: {new_phone}")
-                else:
-                    print("⚠️ Invalid phone number format. Using default.")
-                    config['emergency_contact'] = DEFAULT_EMERGENCY_CONTACT
-                    save_config(config)
-            else:
-                print("⚠️ Invalid phone number. Using default.")
-                config['emergency_contact'] = DEFAULT_EMERGENCY_CONTACT
+                        print("⚠️ Invalid phone number. Using default.")
+                        config['emergency_contact'] = DEFAULT_EMERGENCY_CONTACT
+                        save_config(config)
+
+                whatsapp_choice = input("\nDo you want to send WhatsApp message before calling? (y/n): ").strip().lower()
+                config['prefer_whatsapp_web'] = (whatsapp_choice == 'y' or whatsapp_choice == 'yes')
                 save_config(config)
-        
-        # Also prompt for WhatsApp preference
-        whatsapp_choice = input("\nDo you want to send WhatsApp message before calling? (y/n): ").strip().lower()
-        config['prefer_whatsapp_web'] = (whatsapp_choice == 'y' or whatsapp_choice == 'yes')
-        save_config(config)
-        
-        whatsapp_status = "enabled" if config['prefer_whatsapp_web'] else "disabled"
-        print(f"WhatsApp Web integration: {whatsapp_status}")
-        
-        print("\n" + "=" * 40)
-        print("Emergency contact verification complete!\n")
-        
-        return config
-        
+                whatsapp_status = "enabled" if config['prefer_whatsapp_web'] else "disabled"
+                print(f"WhatsApp Web integration: {whatsapp_status}")
+                print("\n" + "=" * 40)
+                print("Emergency contact verification complete!\n")
+                return config
+            except Exception as e:
+                print(f"Error during phone number update: {e}")
+                return load_config()
+        else:
+            # Non-interactive: use GUI dialogs if tkinter available, otherwise keep existing config
+            try:
+                import tkinter as _tk
+                from tkinter import simpledialog as _sd, messagebox as _mb
+                root = _tk.Tk()
+                root.withdraw()
+                if current_phone:
+                    _mb.showinfo("Emergency Contact", f"Current emergency contact: {current_phone}\n\nThis number will be called automatically if you use the SOS signal (6 dots: ......)", parent=root)
+                    update = _mb.askyesno("Update Emergency Contact", "Do you want to update your emergency contact number?", parent=root)
+                    if update:
+                        new_phone = _sd.askstring("Update Emergency Contact", "Enter new emergency contact number (with country code, e.g., +919876543210):", parent=root)
+                        if new_phone and len(new_phone) >= 10 and new_phone.startswith('+') and any(c.isdigit() for c in new_phone):
+                            config['emergency_contact'] = new_phone.strip()
+                            save_config(config)
+                else:
+                    _mb.showwarning("Emergency Contact", "No emergency contact found! You may set one now.", parent=root)
+                    new_phone = _sd.askstring("Set Emergency Contact", "Enter emergency contact number (with country code, e.g., +919876543210):", parent=root)
+                    if new_phone and len(new_phone) >= 10 and new_phone.startswith('+') and any(c.isdigit() for c in new_phone):
+                        config['emergency_contact'] = new_phone.strip()
+                        save_config(config)
+
+                pref = _mb.askyesno("WhatsApp Preference", "Do you want to send WhatsApp message before calling?", parent=root)
+                config['prefer_whatsapp_web'] = pref
+                save_config(config)
+                whatsapp_status = "enabled" if config['prefer_whatsapp_web'] else "disabled"
+                print(f"WhatsApp Web integration: {whatsapp_status}")
+                print("\n" + "=" * 40)
+                print("Emergency contact verification complete!\n")
+                root.destroy()
+                return config
+            except Exception:
+                # No GUI available; just return current config
+                return config
     except Exception as e:
         print(f"Error during phone number update: {e}")
         return load_config()  # Return current config if error
@@ -2258,35 +2614,41 @@ def main():
     print("🚀 OptiBlink - Eye Tracking Morse Code Interface")
     print("=" * 50)
     
-    # Prompt for emergency contact update on every run
-    updated_config = prompt_phone_number_update()
+    # Load config silently - no prompts at startup
+    current_config = load_config()
+    emergency_contact = current_config.get('emergency_contact', 'Not configured')
+    print(f"📞 Emergency contact: {emergency_contact} (Click phone icon to update)")
     
-    # Initialize camera first for immediate feedback
+    # Initialize camera immediately
     print("📹 Initializing camera...")
     cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("❌ Error: Could not open camera")
-        print("💡 Make sure your camera is connected and not being used by another application")
-        return
-    
+
     # Initialize systems with comprehensive stderr suppression
     print("🧠 Loading AI models and systems...")
     
-    # Restore boot-time suppressed native stderr now that we're ready
-    try:
-        if '_BOOT_SAVED_FD' in globals() and _BOOT_SAVED_FD is not None:
-            os.dup2(_BOOT_SAVED_FD, 2)
-            os.close(_BOOT_SAVED_FD)
-            _BOOT_SAVED_FD = None
-    except Exception:
-        pass
-
-    # Comprehensive native stderr suppression for TF/MediaPipe warnings
-    with _suppress_native_stderr():
+    # CRITICAL: Keep boot-time stderr suppression active
+    # TensorFlow Lite XNNPACK delegate loads on FIRST USE, not on import!
+    # Solution: Never restore stderr, keep it suppressed permanently during runtime
+    
+    with _suppress_all_warnings():
         auto = AutoCompleteSystem()
         eye_tracker = EyeTracker(auto)
     
     print("✅ OptiBlink ready!")
+    
+    # OPTION: Keep stderr permanently suppressed to prevent ANY future warnings
+    # We've saved it, but we won't restore it - stderr stays blocked forever
+    # This is the nuclear option but guarantees zero warnings
+    
+    # Optionally restore stderr (commented out to keep suppression active):
+    # try:
+    #     if '_BOOT_SAVED_FD' in globals() and _BOOT_SAVED_FD is not None:
+    #         os.dup2(_BOOT_SAVED_FD, 2)
+    #         os.close(_BOOT_SAVED_FD)
+    #         if sys.stderr:
+    #             sys.stderr.reconfigure(encoding='utf-8')
+    # except Exception:
+    #     pass
     print("👁️  Look at the camera and blink to start calibration")
     print("📖 Morse code reference available in 'morse_keyboard.jpg'")
     print("🆘 Emergency SOS: Blink pattern '......' (6 dots)")
@@ -2354,33 +2716,40 @@ def main():
     position_attempts = 0
     max_position_attempts = 10
     
+
+    # --- Mouse callback integration ---
+    global icon_bbox_global, keyboard_bbox_global, window_height_global, window_width_global, eye_tracker_global, video_height_global
+    cv2.namedWindow(WINDOW_NAME)
+    cv2.setMouseCallback(WINDOW_NAME, mouse_callback)
+
     try:
         while True:
             ret, frame = cap.read()
             if not ret:
                 print("Failed to grab frame")
                 break
-            
             frame = cv2.flip(frame, 1)
-
             keyboard_height_ratio = 0.45
             keyboard_height = int(window_height * keyboard_height_ratio)
             video_height = window_height - keyboard_height
-
             original_aspect_ratio = frame.shape[1] / frame.shape[0]
             video_width_normal = int(video_height * original_aspect_ratio)
-            
             video_frame_resized = cv2.resize(frame, (video_width_normal, video_height))
-            
             video_canvas = np.zeros((video_height, window_width, 3), dtype=np.uint8)
             x_offset = (window_width - video_width_normal) // 2
             video_canvas[0:video_height, x_offset:x_offset+video_width_normal] = video_frame_resized
-
             processed_video_frame = eye_tracker.process_frame(video_canvas)
-
             # Create dynamic keyboard with highlighting
             keyboard_img = eye_tracker.draw_keyboard(window_width, keyboard_height)
-
+            # Get call icon bbox from eye_tracker if available
+            icon_bbox = getattr(eye_tracker, '_icon_bbox_attr', None)
+            # Save icon and keyboard bbox for mouse callback
+            icon_bbox_global = icon_bbox
+            keyboard_bbox_global = (0, video_height, window_width, keyboard_height)
+            window_height_global = window_height
+            window_width_global = window_width
+            video_height_global = video_height
+            eye_tracker_global = eye_tracker
             # Check if transparency timer has expired and restore opacity
             if (eye_tracker.is_transparent and 
                 eye_tracker.transparency_timer > 0 and
@@ -2389,7 +2758,6 @@ def main():
                 eye_tracker.is_transparent = False
                 eye_tracker.transparency_timer = 0
                 print("Window opacity restored to normal transparency")
-
             # Check if SOS cooldown has expired and restore system activity
             if (eye_tracker.sos_cooldown_timer > 0 and
                 time.time() - eye_tracker.sos_cooldown_timer > eye_tracker.sos_cooldown_duration):
@@ -2397,14 +2765,11 @@ def main():
                 eye_tracker.sos_cooldown_timer = 0
                 status = "ACTIVE" if eye_tracker.is_system_active else "SLEEP"
                 print(f"SOS cooldown expired - System restored to {status}")
-            
             # Check if phone call pause has expired and restore keyboard processing
             eye_tracker.check_phone_call_status()
-
             full_display_frame = np.zeros((window_height, window_width, 3), dtype=np.uint8)
             full_display_frame[0:video_height, 0:window_width] = processed_video_frame
             full_display_frame[video_height:video_height+keyboard_height, 0:window_width] = keyboard_img
-
             cv2.imshow(WINDOW_NAME, full_display_frame)
             
             # Position window in top-right corner (only try for first few frames)
@@ -2469,18 +2834,26 @@ def main():
                 # Suppress final positioning message for cleaner output
                 # print(f"Window positioned at top-right corner: ({x_pos}, {y_pos})")
 
-            # Robust window close detection
+            # Robust window close detection - check if window was closed by user clicking X button
             try:
-                if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+                window_property = cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE)
+                if window_property < 1:
+                    print("\n👋 Window closed by user. OptiBlink shutting down...")
                     break
             except cv2.error:
+                print("\n👋 Window closed. OptiBlink shutting down...")
                 break
 
             key = cv2.waitKey(1) & 0xFF
-            if key == -1:
-                # If window is closed, waitKey returns -1
+            
+            # Additional check for window close after waitKey
+            try:
                 if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
+                    print("\n👋 Window closed. OptiBlink shutting down...")
                     break
+            except cv2.error:
+                print("\n👋 Window closed. OptiBlink shutting down...")
+                break
             
             # Check for actual keyboard input (only when window has focus and key is physically pressed)
             # Use GetAsyncKeyState to check for actual physical key presses
@@ -2515,10 +2888,147 @@ def main():
         cap.release()
         cv2.destroyAllWindows()
 
+
+# --- Mouse callback and update dialog ---
+import threading
+import tkinter as tk
+from tkinter import simpledialog, messagebox
+
+icon_bbox_global = None
+keyboard_bbox_global = None
+window_height_global = None
+window_width_global = None
+eye_tracker_global = None
+
+def update_emergency_contact_dialog():
+    """Update emergency contact in both config.json and the running EyeTracker instance"""
+    # Run in a separate thread to avoid blocking OpenCV
+    def run_dialog():
+        root = tk.Tk()
+        root.withdraw()
+        root.title("Update Emergency Contact")
+        
+        current = (eye_tracker_global.config or {}).get("emergency_contact", "")
+        prompt_text = f"Current: {current}\n\nEnter new emergency contact number:\n(Include country code, e.g., +919876543210)"
+        
+        new_contact = simpledialog.askstring(
+            "Update Emergency Contact", 
+            prompt_text, 
+            parent=root
+        )
+        
+        if new_contact and new_contact.strip():
+            new_contact = new_contact.strip()
+            
+            # Validate the phone number format
+            if len(new_contact) < 10:
+                messagebox.showerror(
+                    "Invalid Number", 
+                    "Phone number is too short. Please enter a valid number with country code.",
+                    parent=root
+                )
+                root.destroy()
+                return
+            
+            # Update in the config dictionary
+            eye_tracker_global.config["emergency_contact"] = new_contact
+            
+            # Save to config.json file
+            save_config(eye_tracker_global.config)
+            print(f"✅ Config file updated with new emergency contact: {new_contact}")
+            
+            # Update the live EyeTracker instance's emergency_contact attribute
+            eye_tracker_global.emergency_contact = new_contact.replace(" ", "").replace("-", "")
+            print(f"✅ EyeTracker instance updated with emergency contact: {eye_tracker_global.emergency_contact}")
+            
+            # Show success message
+            messagebox.showinfo(
+                "Success", 
+                f"Emergency contact updated successfully!\n\nNew contact: {new_contact}\n\nThis number will be used for SOS calls.",
+                parent=root
+            )
+            
+            print("━" * 50)
+            print("📞 EMERGENCY CONTACT UPDATED")
+            print(f"   New Number: {new_contact}")
+            print(f"   Cleaned Format: {eye_tracker_global.emergency_contact}")
+            print(f"   Saved to: {CONFIG_PATH}")
+            print("━" * 50)
+        
+        root.destroy()
+    
+    t = threading.Thread(target=run_dialog, daemon=True)
+    t.start()
+
+def mouse_callback(event, x, y, flags, param):
+    global eye_tracker_global
+    
+    # Handle mouse movement for hover effect
+    if event == cv2.EVENT_MOUSEMOVE:
+        if icon_bbox_global and video_height_global and eye_tracker_global:
+            icon_x, icon_y, icon_w, icon_h = icon_bbox_global
+            # Check if mouse is over the icon in video area
+            if y < video_height_global:  # Mouse is in video area
+                # Add some padding for easier clicking
+                padding = 10
+                if (icon_x - padding <= x < icon_x + icon_w + padding) and \
+                   (icon_y - padding <= y < icon_y + icon_h + padding):
+                    eye_tracker_global._icon_hovering = True
+                    # Change cursor to hand pointer using Windows API
+                    if WIN32_AVAILABLE:
+                        try:
+                            import win32api
+                            IDC_HAND = 32649
+                            hand_cursor = win32api.LoadCursor(0, IDC_HAND)
+                            win32api.SetCursor(hand_cursor)
+                        except:
+                            pass
+                else:
+                    eye_tracker_global._icon_hovering = False
+                    # Change cursor back to default arrow
+                    if WIN32_AVAILABLE:
+                        try:
+                            import win32api
+                            IDC_ARROW = 32512
+                            arrow_cursor = win32api.LoadCursor(0, IDC_ARROW)
+                            win32api.SetCursor(arrow_cursor)
+                        except:
+                            pass
+            else:
+                eye_tracker_global._icon_hovering = False
+                # Change cursor back to default arrow
+                if WIN32_AVAILABLE:
+                    try:
+                        import win32api
+                        IDC_ARROW = 32512
+                        arrow_cursor = win32api.LoadCursor(0, IDC_ARROW)
+                        win32api.SetCursor(arrow_cursor)
+                    except:
+                        pass
+    
+    # Handle left click
+    elif event == cv2.EVENT_LBUTTONDOWN:
+        # Check if click is on the call icon in video area
+        if icon_bbox_global and video_height_global:
+            icon_x, icon_y, icon_w, icon_h = icon_bbox_global
+            # Icon is in the video area (top portion of window)
+            if y < video_height_global:  # Click is in video area
+                # Add some padding for easier clicking
+                padding = 10
+                if (icon_x - padding <= x < icon_x + icon_w + padding) and \
+                   (icon_y - padding <= y < icon_y + icon_h + padding):
+                    print("📞 Call icon clicked - Opening emergency contact dialog...")
+                    update_emergency_contact_dialog()
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
         print(f"Error occurred: {e}")
         traceback.print_exc()
-        input("Press Enter to continue...")
+        try:
+            # Only wait for Enter if running in an interactive console
+            if sys.stdin and sys.stdin.isatty():
+                input("Press Enter to continue...")
+        except Exception:
+            pass
