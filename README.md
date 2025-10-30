@@ -5,6 +5,10 @@
 [![MediaPipe](https://img.shields.io/badge/MediaPipe-0.8+-orange.svg)](https://mediapipe.dev/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+## 🌐 Website
+
+Check out the live demo and learn more about OptiBlink at: **[https://optiblink.vercel.app/](https://optiblink.vercel.app/)**
+
 ## 📖 Overview
 
 OptiBlink is an innovative assistive technology solution designed to help paralyzed patients communicate through blink-based text input. Using computer vision and machine learning, the system detects eye blinks and converts them into text input using Morse code patterns, enabling individuals with limited mobility to type and communicate effectively.
